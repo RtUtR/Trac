@@ -1,0 +1,78 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: flutter_app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.29.2'
+          channel: stable
+          cache: true
+
+      - name: Create env file from secrets
+        env:
+          ENV_JSON_SECRET: ${{ secrets.ENV_JSON }}
+          SUPABASE_URL_SECRET: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY_SECRET: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          mkdir -p config
+          if [ -n "$ENV_JSON_SECRET" ]; then
+            printf '%s\n' "$ENV_JSON_SECRET" > config/env.json
+          elif [ -n "$SUPABASE_URL_SECRET" ] && [ -n "$SUPABASE_ANON_KEY_SECRET" ]; then
+            jq -n \
+              --arg url "$SUPABASE_URL_SECRET" \
+              --arg key "$SUPABASE_ANON_KEY_SECRET" \
+              '{SUPABASE_URL: $url, SUPABASE_ANON_KEY: $key}' > config/env.json
+          else
+            cp config/env.example.json config/env.json
+          fi
+          python3 -m json.tool config/env.json > /dev/null
+
+      - name: Regenerate Android scaffold with the current Flutter template (keep manifest & ProGuard/R8 config)
+        run: |
+          cp android/app/src/main/AndroidManifest.xml /tmp/AndroidManifest.xml
+          cp android/app/proguard-rules.pro /tmp/proguard-rules.pro
+          rm -rf android
+          flutter create . --platforms=android --org com.familytrack --project-name family_track
+          cp /tmp/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+          cp /tmp/proguard-rules.pro android/app/proguard-rules.pro
+          sed -i 's/ package="[^"]*"//' android/app/src/main/AndroidManifest.xml
+          if ! grep -q "android.builtInKotlin=false" android/gradle.properties; then
+            echo "android.builtInKotlin=false" >> android/gradle.properties
+          fi
+          # Ensure minSdk = 23 and disable R8 shrinking/obfuscation so MapLibre & background service classes are never stripped
+          if [ -f android/app/build.gradle.kts ]; then
+            sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/' android/app/build.gradle.kts
+            sed -i 's/signingConfig = signingConfigs.getByName("debug")/signingConfig = signingConfigs.getByName("debug")\n            isMinifyEnabled = false\n            isShrinkResources = false\n            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")/' android/app/build.gradle.kts
+          elif [ -f android/app/build.gradle ]; then
+            sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/' android/app/build.gradle
+            sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 23/' android/app/build.gradle
+            sed -i 's/signingConfig = signingConfigs.debug/signingConfig = signingConfigs.debug\n            minifyEnabled false\n            shrinkResources false\n            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"/' android/app/build.gradle
+          fi
+
+      - run: flutter pub get
+
+      - run: flutter build apk --release --dart-define-from-file=config/env.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: familytrack-apk
+          path: flutter_app/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 14

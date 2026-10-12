@@ -21,8 +21,8 @@ class AppLocalizations {
       'app_title': 'FamilyTrack',
       'missing_config_title': 'Supabase Configuration Missing',
       'missing_config_body':
-          'SUPABASE_URL or SUPABASE_ANON_KEY was not provided at compile time. '
-          'Create config/env.json and run the app with --dart-define-from-file=config/env.json.',
+          'SUPABASE_URL or SUPABASE_ANON_KEY was not provided at compile time (or contains placeholder values). '
+          'Create config/env.json and build with --dart-define-from-file=config/env.json.',
       'consent_title': 'Background Location Sharing',
       'consent_body':
           'FamilyTrack shares your phone\'s current location in the background with members of your group. '
@@ -35,14 +35,19 @@ class AppLocalizations {
           'On Xiaomi (MIUI), Samsung, or Huawei phones, please set Battery Saver to "No restrictions" '
           'so background heartbeats are not paused by the system.',
       'consent_accept': 'I Understand & Accept',
-      'login_title': 'Join a Group',
-      'login_subtitle': 'Enter your 12-character group code (XXXX-XXXX-XXXX) and your role label.',
+      'login_title': 'Join or Log In to a Group',
+      'login_subtitle':
+          'Enter your 12-character group code (XXXX-XXXX-XXXX) and your role label.',
       'code_label': 'Group Code',
       'code_hint': 'XXXX-XXXX-XXXX',
       'role_label': 'Your Role in Group',
       'role_hint': 'e.g. Mother, Brother, Father',
-      'join_button': 'Join',
-      'joining': 'Joining...',
+      'join_button': 'Join as New Member',
+      'login_existing_button': 'Log In with Existing Role',
+      'login_existing_hint':
+          'Already created your role label earlier? Tap "Log In with Existing Role" to sign back in with the same label.',
+      'resume_saved_group': 'Continue as {role}',
+      'joining': 'Connecting...',
       'refresh': 'Refresh',
       'people': 'People',
       'map_style': 'Map Style',
@@ -76,7 +81,7 @@ class AppLocalizations {
       'err_group_full':
           'This group has reached its maximum number of member devices.',
       'err_name_taken':
-          'This role label is already taken in this group. Choose a different label.',
+          'This role label is already in use. If it is your own role, tap "Log In with Existing Role" below.',
       'err_unauthorized':
           'Session authorization failed. Please try again.',
       'err_bad_request':
@@ -95,7 +100,7 @@ class AppLocalizations {
       'missing_config_title': 'تنظیمات سوپابیس یافت نشد',
       'missing_config_body':
           'مقادیر SUPABASE_URL یا SUPABASE_ANON_KEY در زمان ساخت برنامه وارد نشده‌اند. '
-          'فایل config/env.json را ایجاد کرده و برنامه را با --dart-define-from-file=config/env.json اجرا کنید.',
+          'فایل config/env.json را ایجاد کرده و برنامه را با --dart-define-from-file=config/env.json بسازید.',
       'consent_title': 'اشتراک‌گذاری موقعیت مکانی در پس‌زمینه',
       'consent_body':
           'این برنامه موقعیت فعلی تلفن شما را در پس‌زمینه با اعضای گروهتان به اشتراک می‌گذارد. '
@@ -108,14 +113,19 @@ class AppLocalizations {
           'در گوشی‌های شیائومی، سامسونگ و هوآوی، لطفاً بهینه‌سازی باتری را برای این برنامه روی '
           '«بدون محدودیت» قرار دهید تا ارسال موقعیت در پس‌زمینه متوقف نشود.',
       'consent_accept': 'متوجه شدم و می‌پذیرم',
-      'login_title': 'ورود به گروه',
-      'login_subtitle': 'کد ۱۲ کاراکتری گروه (XXXX-XXXX-XXXX) و عنوان خود را وارد کنید.',
+      'login_title': 'ورود یا عضویت در گروه',
+      'login_subtitle':
+          'کد ۱۲ کاراکتری گروه (XXXX-XXXX-XXXX) و عنوان خود را وارد کنید.',
       'code_label': 'کد گروه',
       'code_hint': 'XXXX-XXXX-XXXX',
       'role_label': 'عنوان شما در گروه',
       'role_hint': 'مثال: مادر، برادر، پدر',
-      'join_button': 'ورود به گروه',
-      'joining': 'در حال بررسی...',
+      'join_button': 'عضویت به عنوان عضو جدید',
+      'login_existing_button': 'ورود با عنوان قبلی من',
+      'login_existing_hint':
+          'اگر قبلاً با این عنوان وارد شده‌اید، دکمه «ورود با عنوان قبلی من» را بزنید تا با همان عنوان وارد شوید.',
+      'resume_saved_group': 'ادامه با عنوان {role}',
+      'joining': 'در حال اتصال...',
       'refresh': 'بروزرسانی',
       'people': 'اعضا',
       'map_style': 'نمای نقشه',
@@ -149,7 +159,7 @@ class AppLocalizations {
       'err_group_full':
           'ظرفیت تعداد اعضای این گروه تکمیل شده است.',
       'err_name_taken':
-          'این عنوان قبلاً در این گروه انتخاب شده است. لطفاً عنوان دیگری انتخاب کنید.',
+          'این عنوان قبلاً ثبت شده است. اگر این عنوان متعلق به خودتان است، دکمه «ورود با عنوان قبلی من» را بزنید.',
       'err_unauthorized':
           'خطا در احراز هویت نشست. لطفاً دوباره تلاش کنید.',
       'err_bad_request':
@@ -179,8 +189,6 @@ class AppLocalizations {
     return value;
   }
 
-  /// Maps backend error code strings (e.g. `invalid_code`, `name_taken`, `group_expired`)
-  /// to their localized Persian or English message.
   String translateErrorCode(String? errorCode) {
     if (errorCode == null || errorCode.isEmpty) {
       return tr('err_server_error');

@@ -2,6 +2,7 @@ import setupGuideRaw from '../../SETUP_GUIDE.md?raw';
 import envExampleRaw from '../../config/env.example.json?raw';
 import flutterGitignoreRaw from '../../flutter_app/.gitignore?raw';
 import vscodeLaunchRaw from '../../flutter_app/.vscode/launch.json?raw';
+import githubWorkflowRaw from '../../flutter_app/.github/workflows/build-apk.yml?raw';
 import pubspecRaw from '../../flutter_app/pubspec.yaml?raw';
 import analysisOptionsRaw from '../../flutter_app/analysis_options.yaml?raw';
 import appConfigRaw from '../../flutter_app/lib/config/app_config.dart?raw';
@@ -15,8 +16,14 @@ import loginScreenRaw from '../../flutter_app/lib/screens/login_screen.dart?raw'
 import mapScreenRaw from '../../flutter_app/lib/screens/map_screen.dart?raw';
 import mainDartRaw from '../../flutter_app/lib/main.dart?raw';
 import androidManifestRaw from '../../flutter_app/android/app/src/main/AndroidManifest.xml?raw';
+import androidRootBuildGradleRaw from '../../flutter_app/android/build.gradle?raw';
+import androidSettingsGradleRaw from '../../flutter_app/android/settings.gradle?raw';
+import androidGradlePropertiesRaw from '../../flutter_app/android/gradle.properties?raw';
 import androidAppBuildGradleRaw from '../../flutter_app/android/app/build.gradle?raw';
-import mainActivityKtRaw from '../../flutter_app/android/app/src/main/kotlin/com/example/family_track/MainActivity.kt?raw';
+import androidProguardRulesRaw from '../../flutter_app/android/app/proguard-rules.pro?raw';
+import mainActivityKtRaw from '../../flutter_app/android/app/src/main/kotlin/com/familytrack/family_track/MainActivity.kt?raw';
+import icLauncherXmlRaw from '../../flutter_app/android/app/src/main/res/drawable/ic_launcher.xml?raw';
+import icBgServiceSmallXmlRaw from '../../flutter_app/android/app/src/main/res/drawable/ic_bg_service_small.xml?raw';
 import infoPlistRaw from '../../flutter_app/ios/Runner/Info.plist?raw';
 import iosPodfileRaw from '../../flutter_app/ios/Podfile?raw';
 import appDelegateSwiftRaw from '../../flutter_app/ios/Runner/AppDelegate.swift?raw';
@@ -33,14 +40,64 @@ export interface DeliverableFile {
 
 export const DELIVERABLE_FILES: DeliverableFile[] = [
   {
+    id: 'github-workflow',
+    path: '.github/workflows/build-apk.yml',
+    title: '.github/workflows/build-apk.yml',
+    category: 'platform',
+    language: 'yaml',
+    summary:
+      'Fixed GitHub Actions workflow: safely writes config/env.json from secrets.ENV_JSON, preserves AndroidManifest.xml and proguard-rules.pro across flutter create, sets minSdk=23, and disables R8 shrinking in build.gradle(.kts).',
+    content: githubWorkflowRaw,
+  },
+  {
+    id: 'android-manifest',
+    path: 'flutter_app/android/app/src/main/AndroidManifest.xml',
+    title: 'android/app/src/main/AndroidManifest.xml',
+    category: 'platform',
+    language: 'xml',
+    summary:
+      'Uses android:name=".MainActivity" and android:icon="@mipmap/ic_launcher" to match flutter create --org com.familytrack --project-name family_track, plus tools:replace="android:exported" on BackgroundService.',
+    content: androidManifestRaw,
+  },
+  {
+    id: 'main-dart',
+    path: 'flutter_app/lib/main.dart',
+    title: 'lib/main.dart',
+    category: 'dart',
+    language: 'dart',
+    summary:
+      'Wraps startup in runZonedGuarded + PlatformDispatcher.onError + ErrorWidget.builder, awaits SharedPreferences and Supabase.initialize in try/catch, and defers BackgroundLocationService initialization until after runApp() and permission grant.',
+    content: mainDartRaw,
+  },
+  {
+    id: 'background-location-service',
+    path: 'flutter_app/lib/services/background_location_service.dart',
+    title: 'lib/services/background_location_service.dart',
+    category: 'dart',
+    language: 'dart',
+    summary:
+      'Prevents Android 12–15 startup crashes: uses autoStart: false and autoStartOnBoot: false, omits custom notificationChannelId so default channel is created automatically, and configures/starts only in startIfPermitted().',
+    content: backgroundLocationRaw,
+  },
+  {
     id: 'app-config',
     path: 'flutter_app/lib/config/app_config.dart',
     title: 'lib/config/app_config.dart',
     category: 'dart',
     language: 'dart',
     summary:
-      'Reads SUPABASE_URL and SUPABASE_ANON_KEY via String.fromEnvironment, normalizes Persian/Arabic digits into XXXX-XXXX-XXXX group codes, and configures Waymorphic styles.',
+      'Reads SUPABASE_URL and SUPABASE_ANON_KEY via String.fromEnvironment, validates HTTPS URL and rejects placeholder strings in isSupabaseConfigured so invalid env.json never crashes Supabase.initialize.',
     content: appConfigRaw,
+  },
+  {
+    id: 'app-providers',
+    path: 'flutter_app/lib/providers/app_providers.dart',
+    title: 'lib/providers/app_providers.dart',
+    category: 'dart',
+    language: 'dart',
+    summary:
+      'Riverpod state controller calling BackgroundLocationService.startIfPermitted() only after runtime location permissions are verified.',
+    content: appProvidersRaw,
   },
   {
     id: 'supabase-service',
@@ -53,14 +110,14 @@ export const DELIVERABLE_FILES: DeliverableFile[] = [
     content: supabaseServiceRaw,
   },
   {
-    id: 'app-providers',
-    path: 'flutter_app/lib/providers/app_providers.dart',
-    title: 'lib/providers/app_providers.dart',
+    id: 'map-screen',
+    path: 'flutter_app/lib/screens/map_screen.dart',
+    title: 'lib/screens/map_screen.dart',
     category: 'dart',
     language: 'dart',
     summary:
-      'Riverpod state controller saving group_id, display_name, and color locally, handling JSON {ok, error, remaining_seconds} responses, and redirecting to login on expiry.',
-    content: appProvidersRaw,
+      'Uses MapLibreMap, MapLibreMapController, _mapController?.setStyle(...) for runtime style switching and retry, and lowerCamelCase enums.',
+    content: mapScreenRaw,
   },
   {
     id: 'login-screen',
@@ -73,34 +130,14 @@ export const DELIVERABLE_FILES: DeliverableFile[] = [
     content: loginScreenRaw,
   },
   {
-    id: 'map-screen',
-    path: 'flutter_app/lib/screens/map_screen.dart',
-    title: 'lib/screens/map_screen.dart',
+    id: 'consent-screen',
+    path: 'flutter_app/lib/screens/consent_screen.dart',
+    title: 'lib/screens/consent_screen.dart',
     category: 'dart',
     language: 'dart',
     summary:
-      'Native MapLibreMap with Waymorphic styles, top linear progress bar + 20s timeout fallback, single GeoJSON data-driven circle layer, member chips, and external Google Maps / geo: links.',
-    content: mapScreenRaw,
-  },
-  {
-    id: 'background-location-service',
-    path: 'flutter_app/lib/services/background_location_service.dart',
-    title: 'lib/services/background_location_service.dart',
-    category: 'dart',
-    language: 'dart',
-    summary:
-      'Android foreground service + iOS background handler upserting {user_id, lat, lng, accuracy} (never sending updated_at) every ~2m while moving (>75m) or ~20m stationary heartbeat.',
-    content: backgroundLocationRaw,
-  },
-  {
-    id: 'main-dart',
-    path: 'flutter_app/lib/main.dart',
-    title: 'lib/main.dart',
-    category: 'dart',
-    language: 'dart',
-    summary:
-      'Initializes Supabase once at startup, calls signInAnonymously() on first launch, and shows MissingConfigScreen if SUPABASE_URL or SUPABASE_ANON_KEY is empty.',
-    content: mainDartRaw,
+      'First-launch disclosure explaining background location sharing, sequential When In Use -> Always permissions, and Xiaomi/Samsung battery optimization guidance.',
+    content: consentScreenRaw,
   },
   {
     id: 'app-localizations',
@@ -123,14 +160,53 @@ export const DELIVERABLE_FILES: DeliverableFile[] = [
     content: modelsRaw,
   },
   {
-    id: 'consent-screen',
-    path: 'flutter_app/lib/screens/consent_screen.dart',
-    title: 'lib/screens/consent_screen.dart',
-    category: 'dart',
-    language: 'dart',
+    id: 'android-app-build-gradle',
+    path: 'flutter_app/android/app/build.gradle',
+    title: 'android/app/build.gradle',
+    category: 'platform',
+    language: 'groovy',
     summary:
-      'First-launch disclosure explaining background location sharing, sequential When In Use -> Always permissions, and Xiaomi/Samsung battery optimization guidance.',
-    content: consentScreenRaw,
+      'Configured with namespace & applicationId "com.familytrack.family_track", compileSdk 35, minSdk 23, targetSdk 35, Java 21, minifyEnabled false, shrinkResources false, and proguard-rules.pro.',
+    content: androidAppBuildGradleRaw,
+  },
+  {
+    id: 'android-proguard-rules',
+    path: 'flutter_app/android/app/proguard-rules.pro',
+    title: 'android/app/proguard-rules.pro',
+    category: 'platform',
+    language: 'plaintext',
+    summary:
+      'ProGuard / R8 keep rules preserving Flutter wrapper, MapLibre native classes, flutter_background_service, and geolocator.',
+    content: androidProguardRulesRaw,
+  },
+  {
+    id: 'main-activity-kt',
+    path: 'flutter_app/android/app/src/main/kotlin/com/familytrack/family_track/MainActivity.kt',
+    title: 'android/.../MainActivity.kt',
+    category: 'platform',
+    language: 'kotlin',
+    summary:
+      'Android FlutterActivity entry point in package com.familytrack.family_track matching --org com.familytrack --project-name family_track.',
+    content: mainActivityKtRaw,
+  },
+  {
+    id: 'ic-launcher-xml',
+    path: 'flutter_app/android/app/src/main/res/drawable/ic_launcher.xml',
+    title: 'android/.../res/drawable/ic_launcher.xml',
+    category: 'platform',
+    language: 'xml',
+    summary: 'Vector app icon foreground drawable.',
+    content: icLauncherXmlRaw,
+  },
+  {
+    id: 'ic-bg-service-small-xml',
+    path: 'flutter_app/android/app/src/main/res/drawable/ic_bg_service_small.xml',
+    title: 'android/.../res/drawable/ic_bg_service_small.xml',
+    category: 'platform',
+    language: 'xml',
+    summary:
+      'Default small notification vector icon expected by flutter_background_service_android.',
+    content: icBgServiceSmallXmlRaw,
   },
   {
     id: 'pubspec',
@@ -139,8 +215,38 @@ export const DELIVERABLE_FILES: DeliverableFile[] = [
     category: 'platform',
     language: 'yaml',
     summary:
-      'Flutter dependencies: flutter_riverpod, supabase_flutter, geolocator, flutter_background_service, maplibre_gl, url_launcher, flutter_localizations, shared_preferences.',
+      'Upgraded maplibre_gl to ^0.27.1, Dart SDK >=3.7.0 <4.0.0, Flutter >=3.29.0, and latest compatible supabase_flutter, geolocator, and flutter_background_service_android.',
     content: pubspecRaw,
+  },
+  {
+    id: 'android-root-build-gradle',
+    path: 'flutter_app/android/build.gradle',
+    title: 'android/build.gradle',
+    category: 'platform',
+    language: 'groovy',
+    summary:
+      'Project-level build.gradle with ext.kotlin_version = 2.1.0, AGP 8.7.3, and google() / mavenCentral() repositories.',
+    content: androidRootBuildGradleRaw,
+  },
+  {
+    id: 'android-settings-gradle',
+    path: 'flutter_app/android/settings.gradle',
+    title: 'android/settings.gradle',
+    category: 'platform',
+    language: 'groovy',
+    summary:
+      'Declares com.android.application version 8.7.3 and org.jetbrains.kotlin.android version 2.1.0.',
+    content: androidSettingsGradleRaw,
+  },
+  {
+    id: 'android-gradle-properties',
+    path: 'flutter_app/android/gradle.properties',
+    title: 'android/gradle.properties',
+    category: 'platform',
+    language: 'properties',
+    summary:
+      'JVM arguments for Java 21 and android.builtInKotlin=false to suppress the KGP plugin warning.',
+    content: androidGradlePropertiesRaw,
   },
   {
     id: 'env-example-json',
@@ -171,35 +277,6 @@ export const DELIVERABLE_FILES: DeliverableFile[] = [
     summary:
       'VS Code launch configuration passing --dart-define-from-file=config/env.json.',
     content: vscodeLaunchRaw,
-  },
-  {
-    id: 'android-manifest',
-    path: 'flutter_app/android/app/src/main/AndroidManifest.xml',
-    title: 'android/app/src/main/AndroidManifest.xml',
-    category: 'platform',
-    language: 'xml',
-    summary:
-      'Android permissions for ACCESS_FINE_LOCATION, ACCESS_BACKGROUND_LOCATION, FOREGROUND_SERVICE_LOCATION, battery optimization exemption, and geo/https intent queries.',
-    content: androidManifestRaw,
-  },
-  {
-    id: 'android-app-build-gradle',
-    path: 'flutter_app/android/app/build.gradle',
-    title: 'android/app/build.gradle',
-    category: 'platform',
-    language: 'groovy',
-    summary:
-      'Android application Gradle configuration (compileSdk 34, minSdk 21, Java 17).',
-    content: androidAppBuildGradleRaw,
-  },
-  {
-    id: 'main-activity-kt',
-    path: 'flutter_app/android/app/src/main/kotlin/com/example/family_track/MainActivity.kt',
-    title: 'android/.../MainActivity.kt',
-    category: 'platform',
-    language: 'kotlin',
-    summary: 'Android FlutterActivity entry point.',
-    content: mainActivityKtRaw,
   },
   {
     id: 'ios-info-plist',
@@ -245,29 +322,36 @@ export const DELIVERABLE_FILES: DeliverableFile[] = [
     category: 'setup',
     language: 'markdown',
     summary:
-      'Required Flutter version, creating config/env.json from config/env.example.json, --dart-define-from-file build commands (apk & ios), Android/iOS permissions, and battery-optimization notes.',
+      'Required Flutter & Java 21 toolchain, creating config/env.json, --dart-define-from-file release APK/AAB build commands, Android/iOS permissions, and battery-optimization notes.',
     content: setupGuideRaw,
   },
 ];
 
-export const FOLDER_STRUCTURE_TREE = `flutter_app/
-├── .gitignore                   # Uses **/config/env.json (ignores env.json at any depth)
+export const FOLDER_STRUCTURE_TREE = `.github/
+└── workflows/
+    └── build-apk.yml            # Fixed CI workflow preserving manifest + ProGuard/R8 config
+flutter_app/
+├── .gitignore                   # Uses **/config/env.json
 ├── .vscode/
 │   └── launch.json              # Passes --dart-define-from-file=config/env.json
 ├── config/
 │   └── env.example.json         # Committed placeholder template
-├── pubspec.yaml
+├── pubspec.yaml                 # maplibre_gl: ^0.27.1, Dart >=3.7.0, Flutter >=3.29.0
 ├── analysis_options.yaml
 ├── android/
-│   ├── build.gradle
-│   ├── settings.gradle
-│   ├── gradle.properties
+│   ├── build.gradle             # ext.kotlin_version = '2.1.0', AGP 8.7.3
+│   ├── settings.gradle          # AGP 8.7.3 + Kotlin 2.1.0
+│   ├── gradle.properties        # Java 21 args + android.builtInKotlin=false
 │   └── app/
-│       ├── build.gradle
+│       ├── build.gradle         # namespace com.familytrack.family_track, minSdk 23, minifyEnabled false
+│       ├── proguard-rules.pro   # Keep rules for Flutter, MapLibre, background service
 │       └── src/main/
-│           ├── AndroidManifest.xml
-│           ├── kotlin/com/example/family_track/MainActivity.kt
+│           ├── AndroidManifest.xml  # .MainActivity, @mipmap/ic_launcher, flutterEmbedding=2
+│           ├── kotlin/com/familytrack/family_track/MainActivity.kt
 │           └── res/
+│               ├── mipmap-anydpi-v26/ic_launcher.xml
+│               ├── drawable/ic_launcher.xml
+│               ├── drawable/ic_bg_service_small.xml
 │               ├── drawable/launch_background.xml
 │               ├── values/styles.xml
 │               └── values-night/styles.xml
@@ -278,9 +362,9 @@ export const FOLDER_STRUCTURE_TREE = `flutter_app/
 │       ├── Runner-Bridging-Header.h
 │       └── Info.plist
 └── lib/
-    ├── main.dart
+    ├── main.dart                # runZonedGuarded + try/catch + MissingConfigScreen
     ├── config/
-    │   └── app_config.dart
+    │   └── app_config.dart      # String.fromEnvironment + HTTPS/placeholder validation
     ├── l10n/
     │   └── app_localizations.dart
     ├── models/
@@ -289,7 +373,7 @@ export const FOLDER_STRUCTURE_TREE = `flutter_app/
     │   └── app_providers.dart
     ├── services/
     │   ├── supabase_service.dart
-    │   └── background_location_service.dart
+    │   └── background_location_service.dart # autoStart: false, autoStartOnBoot: false
     └── screens/
         ├── consent_screen.dart
         ├── login_screen.dart

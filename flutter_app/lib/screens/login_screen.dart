@@ -43,7 +43,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     super.dispose();
   }
 
-  Future<void> _submit() async {
+  Future<void> _submit({required bool isExistingLogin}) async {
     final normalizedCode = AppConfig.normalizeGroupCode(_codeController.text);
     final role = _roleController.text.trim();
     if (normalizedCode.isEmpty || role.isEmpty) return;
@@ -51,6 +51,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     await ref.read(appControllerProvider.notifier).joinGroup(
           code: normalizedCode,
           displayName: role,
+          isExistingLogin: isExistingLogin,
         );
   }
 
@@ -84,6 +85,30 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   color: theme.colorScheme.onSurface.withOpacity(0.7),
                 ),
               ),
+              if (state.lastSavedGroup != null) ...[
+                const SizedBox(height: 20),
+                OutlinedButton.icon(
+                  onPressed: state.isLoading
+                      ? null
+                      : () => ref
+                          .read(appControllerProvider.notifier)
+                          .resumeSavedGroup(),
+                  icon: const Icon(Icons.login, size: 18),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(48),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  label: Text(
+                    l10n.tr(
+                      'resume_saved_group',
+                      params: {'role': state.lastSavedGroup!.myDisplayName},
+                    ),
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
               if (state.errorCode != null) ...[
                 const SizedBox(height: 20),
                 Container(
@@ -134,8 +159,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 ),
               ),
               const SizedBox(height: 28),
+              // Primary Button: Join as New Member
               FilledButton(
-                onPressed: state.isLoading ? null : _submit,
+                onPressed: state.isLoading
+                    ? null
+                    : () => _submit(isExistingLogin: false),
                 style: FilledButton.styleFrom(
                   minimumSize: const Size.fromHeight(52),
                   shape: RoundedRectangleBorder(
@@ -150,6 +178,38 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
                   ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              // Secondary Button: Log In with Existing Role (solves "label is already in use")
+              OutlinedButton.icon(
+                onPressed: state.isLoading
+                    ? null
+                    : () => _submit(isExistingLogin: true),
+                icon: const Icon(Icons.person_outline, size: 18),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(50),
+                  side: BorderSide(
+                    color: theme.colorScheme.onSurface.withOpacity(0.5),
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+                label: Text(
+                  l10n.tr('login_existing_button'),
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                l10n.tr('login_existing_hint'),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurface.withOpacity(0.65),
+                  height: 1.4,
                 ),
               ),
             ],

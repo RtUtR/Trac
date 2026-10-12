@@ -226,7 +226,6 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   }
 
   Future<void> _openPeopleBottomSheet(BuildContext context) async {
-    // Refresh group member roster from public.members before showing sheet
     await ref.read(appControllerProvider.notifier).refreshGroupMembers();
     if (!context.mounted) return;
 
@@ -375,6 +374,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               await ref
                   .read(appControllerProvider.notifier)
                   .setMapStyle(style);
+              await _mapController?.setStyle(AppConfig.styleUrl(style));
             },
             itemBuilder: (context) => [
               CheckedPopupMenuItem(

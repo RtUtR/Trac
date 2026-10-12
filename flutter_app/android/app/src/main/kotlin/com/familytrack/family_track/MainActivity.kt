@@ -1,4 +1,4 @@
-package com.example.family_track
+package com.familytrack.family_track
 
 import io.flutter.embedding.android.FlutterActivity
 

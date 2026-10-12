@@ -15,11 +15,31 @@ class AppConfig {
 
   // Read compile-time environment variables from config/env.json.
   // Only the publishable (anon) key may be used in the client.
-  static const String supabaseUrl = String.fromEnvironment('SUPABASE_URL');
-  static const String supabaseAnonKey = String.fromEnvironment('SUPABASE_ANON_KEY');
+  static const String supabaseUrl = String.fromEnvironment(
+    'SUPABASE_URL',
+    defaultValue: '',
+  );
+  static const String supabaseAnonKey = String.fromEnvironment(
+    'SUPABASE_ANON_KEY',
+    defaultValue: '',
+  );
 
-  static bool get isSupabaseConfigured =>
-      supabaseUrl.trim().isNotEmpty && supabaseAnonKey.trim().isNotEmpty;
+  /// Returns true only when both SUPABASE_URL and SUPABASE_ANON_KEY are non-empty,
+  /// valid HTTPS URLs, and not the placeholder strings from env.example.json.
+  static bool get isSupabaseConfigured {
+    final url = supabaseUrl.trim();
+    final key = supabaseAnonKey.trim();
+    if (url.isEmpty || key.isEmpty) return false;
+    if (!url.startsWith('https://')) return false;
+    if (url.contains('YOUR-PROJECT') || url.contains('YOUR_PROJECT')) {
+      return false;
+    }
+    if (key.contains('YOUR-PUBLISHABLE-KEY') ||
+        key.contains('YOUR_SUPABASE_ANON_KEY')) {
+      return false;
+    }
+    return true;
+  }
 
   // Allowed 12-character group code alphabet (no 0, O, 1, I, L)
   static const String groupCodeAlphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -30,12 +50,9 @@ class AppConfig {
   static String normalizeGroupCode(String raw) {
     final buffer = StringBuffer();
     for (final rune in raw.runes) {
-      // Persian digits ۰ (0x06F0) .. ۹ (0x06F9)
       if (rune >= 0x06F0 && rune <= 0x06F9) {
         buffer.writeCharCode(0x30 + (rune - 0x06F0));
-      }
-      // Arabic-Indic digits ٠ (0x0660) .. ٩ (0x0669)
-      else if (rune >= 0x0660 && rune <= 0x0669) {
+      } else if (rune >= 0x0660 && rune <= 0x0669) {
         buffer.writeCharCode(0x30 + (rune - 0x0660));
       } else {
         buffer.writeCharCode(rune);
@@ -94,10 +111,7 @@ class AppConfig {
   static const Duration mapReadyTimeout = Duration(seconds: 20);
 
   // Background location sending parameters (battery & data friendly)
-  // Allowed moving interval range: 1–2 minutes (default 2 minutes)
   static const int movingIntervalSeconds = 120;
-  // Minimum displacement threshold before sending while moving (~75 meters)
   static const double minDisplacementMeters = 75.0;
-  // Stationary heartbeat interval (~20 minutes) so "updated X min ago" stays meaningful
   static const int stationaryHeartbeatSeconds = 1200;
 }

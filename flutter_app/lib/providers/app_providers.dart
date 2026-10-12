@@ -23,6 +23,7 @@ class AppState {
   final bool consentAccepted;
   final bool locationPermissionGranted;
   final GroupSummary? activeGroup;
+  final GroupSummary? lastSavedGroup;
   final List<GroupMember> groupMembers;
   final Set<String> followedUserIds;
   final List<MemberLocation> cachedLocations;
@@ -35,6 +36,7 @@ class AppState {
     required this.consentAccepted,
     required this.locationPermissionGranted,
     this.activeGroup,
+    this.lastSavedGroup,
     this.groupMembers = const [],
     this.followedUserIds = const {},
     this.cachedLocations = const [],
@@ -57,6 +59,8 @@ class AppState {
     bool? locationPermissionGranted,
     GroupSummary? activeGroup,
     bool clearActiveGroup = false,
+    GroupSummary? lastSavedGroup,
+    bool clearLastSavedGroup = false,
     List<GroupMember>? groupMembers,
     Set<String>? followedUserIds,
     List<MemberLocation>? cachedLocations,
@@ -71,6 +75,8 @@ class AppState {
       locationPermissionGranted:
           locationPermissionGranted ?? this.locationPermissionGranted,
       activeGroup: clearActiveGroup ? null : (activeGroup ?? this.activeGroup),
+      lastSavedGroup:
+          clearLastSavedGroup ? null : (lastSavedGroup ?? this.lastSavedGroup),
       groupMembers: groupMembers ?? this.groupMembers,
       followedUserIds: followedUserIds ?? this.followedUserIds,
       cachedLocations: cachedLocations ?? this.cachedLocations,
@@ -93,6 +99,8 @@ class AppController extends StateNotifier<AppState> {
   static const _prefGroupId = 'ft_group_id';
   static const _prefMyDisplayName = 'ft_my_display_name';
   static const _prefMyColor = 'ft_my_color';
+  static const _prefGroupExpiresAt = 'ft_group_expires_at';
+  static const _prefGroupMaxDevices = 'ft_group_max_devices';
 
   AppController(this._prefs, this._supabase)
       : super(
@@ -113,62 +121,89 @@ class AppController extends StateNotifier<AppState> {
     return null;
   }
 
+  GroupSummary? _readSavedGroupSummary() {
+    final savedGroupId = _prefs.getString(_prefGroupId);
+    final savedDisplayName = _prefs.getString(_prefMyDisplayName);
+    final savedColor = _prefs.getString(_prefMyColor);
+    if (savedGroupId == null ||
+        savedDisplayName == null ||
+        savedColor == null) {
+      return null;
+    }
+    final savedExpiresRaw = _prefs.getString(_prefGroupExpiresAt);
+    final expiresAt = (savedExpiresRaw != null
+            ? DateTime.tryParse(savedExpiresRaw)
+            : null) ??
+        DateTime.now().add(const Duration(days: 30));
+    final maxDevices = _prefs.getInt(_prefGroupMaxDevices) ?? 4;
+
+    return GroupSummary(
+      id: savedGroupId,
+      maxDevices: maxDevices,
+      expiresAt: expiresAt,
+      myDisplayName: savedDisplayName,
+      myColor: savedColor,
+    );
+  }
+
   Future<void> _bootstrap() async {
     await refreshPermissionStatus();
 
-    // Ensure Anonymous Auth session on first launch and keep the session
     try {
       await _supabase.ensureAnonymousSession();
     } catch (_) {}
 
-    if (!state.consentAccepted) return;
-
-    final savedGroupId = _prefs.getString(_prefGroupId);
-    final savedDisplayName = _prefs.getString(_prefMyDisplayName);
-    final savedColor = _prefs.getString(_prefMyColor);
-
-    if (savedGroupId == null ||
-        savedDisplayName == null ||
-        savedColor == null) {
-      return;
+    final savedSummary = _readSavedGroupSummary();
+    if (savedSummary != null) {
+      state = state.copyWith(lastSavedGroup: savedSummary);
     }
+
+    if (!state.consentAccepted) return;
+    if (savedSummary == null) return;
 
     state = state.copyWith(isLoading: true, clearErrorCode: true);
     try {
-      // Check group info: supabase.from('groups').select('id, max_devices, expires_at').eq('id', groupId)
-      final groupInfo = await _supabase.fetchGroupInfo(savedGroupId);
-      if (groupInfo == null || groupInfo.isExpired) {
-        await _clearLocalGroupData(savedGroupId);
+      // Check group info if accessible via RLS; do NOT clear group if RLS returns null
+      final groupInfo = await _supabase.fetchGroupInfo(savedSummary.id);
+      if (groupInfo != null && groupInfo.isExpired) {
+        await _clearLocalGroupData(savedSummary.id);
         state = state.copyWith(
           isLoading: false,
           clearActiveGroup: true,
+          clearLastSavedGroup: true,
           errorCode: 'group_expired',
         );
         return;
       }
 
-      final summary = GroupSummary(
-        id: groupInfo.id,
-        maxDevices: groupInfo.maxDevices,
-        expiresAt: groupInfo.expiresAt,
-        myDisplayName: savedDisplayName,
-        myColor: savedColor,
+      final effectiveSummary = GroupSummary(
+        id: savedSummary.id,
+        maxDevices: groupInfo?.maxDevices ?? savedSummary.maxDevices,
+        expiresAt: groupInfo?.expiresAt ?? savedSummary.expiresAt,
+        myDisplayName: savedSummary.myDisplayName,
+        myColor: savedSummary.myColor,
       );
 
-      await _activateGroupSession(summary);
-      await BackgroundLocationService.startIfPermitted();
+      await _activateGroupSession(effectiveSummary);
+      if (state.locationPermissionGranted) {
+        await BackgroundLocationService.startIfPermitted();
+      }
     } catch (_) {
       state = state.copyWith(isLoading: false);
     }
   }
 
   Future<void> refreshPermissionStatus() async {
-    final serviceOn = await Geolocator.isLocationServiceEnabled();
-    final perm = await Geolocator.checkPermission();
-    final granted = serviceOn &&
-        (perm == LocationPermission.always ||
-            perm == LocationPermission.whileInUse);
-    state = state.copyWith(locationPermissionGranted: granted);
+    try {
+      final serviceOn = await Geolocator.isLocationServiceEnabled();
+      final perm = await Geolocator.checkPermission();
+      final granted = serviceOn &&
+          (perm == LocationPermission.always ||
+              perm == LocationPermission.whileInUse);
+      state = state.copyWith(locationPermissionGranted: granted);
+    } catch (_) {
+      state = state.copyWith(locationPermissionGranted: false);
+    }
   }
 
   Future<void> acceptConsentAndRequestPermissions() async {
@@ -178,13 +213,15 @@ class AppController extends StateNotifier<AppState> {
       await _supabase.ensureAnonymousSession();
     } catch (_) {}
 
-    LocationPermission perm = await Geolocator.checkPermission();
-    if (perm == LocationPermission.denied) {
-      perm = await Geolocator.requestPermission();
-    }
-    if (perm == LocationPermission.whileInUse) {
-      perm = await Geolocator.requestPermission();
-    }
+    try {
+      LocationPermission perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.whileInUse) {
+        perm = await Geolocator.requestPermission();
+      }
+    } catch (_) {}
 
     await refreshPermissionStatus();
     state = state.copyWith(consentAccepted: true);
@@ -194,18 +231,25 @@ class AppController extends StateNotifier<AppState> {
     }
   }
 
-  /// 1. Join via Edge Function "join_group" with body {code, display_name}.
-  /// After success save group_id, my display_name and color locally.
+  /// 1. Join as new member OR Login with existing role label.
+  /// If `isExistingLogin` is true (or if user taps Login with Existing Role),
+  /// allows logging back in with an already-created role label.
   Future<bool> joinGroup({
     required String code,
     required String displayName,
+    bool isExistingLogin = false,
   }) async {
     state = state.copyWith(isLoading: true, clearErrorCode: true);
 
-    final result = await _supabase.joinGroup(
-      rawCode: code,
-      displayName: displayName,
-    );
+    final result = isExistingLogin
+        ? await _supabase.loginWithExistingRole(
+            rawCode: code,
+            displayName: displayName,
+          )
+        : await _supabase.joinGroup(
+            rawCode: code,
+            displayName: displayName,
+          );
 
     if (!result.ok || result.group == null) {
       state = state.copyWith(
@@ -216,24 +260,48 @@ class AppController extends StateNotifier<AppState> {
     }
 
     final group = result.group!;
-    // Save group_id, my display_name, and color locally
-    await _prefs.setString(_prefGroupId, group.id);
-    await _prefs.setString(_prefMyDisplayName, group.myDisplayName);
-    await _prefs.setString(_prefMyColor, group.myColor);
+    await _saveLocalGroupSummary(group);
 
     await _sendImmediateOwnPosition();
     await _activateGroupSession(group);
-    await BackgroundLocationService.startIfPermitted();
+    if (state.locationPermissionGranted) {
+      await BackgroundLocationService.startIfPermitted();
+    }
     return true;
   }
 
+  /// Re-opens a previously joined group session saved on this phone without calling join_group again.
+  Future<void> resumeSavedGroup() async {
+    final saved = state.lastSavedGroup ?? _readSavedGroupSummary();
+    if (saved == null) return;
+    state = state.copyWith(isLoading: true, clearErrorCode: true);
+    await _activateGroupSession(saved);
+    if (state.locationPermissionGranted) {
+      await BackgroundLocationService.startIfPermitted();
+    }
+  }
+
+  Future<void> _saveLocalGroupSummary(GroupSummary group) async {
+    await _prefs.setString(_prefGroupId, group.id);
+    await _prefs.setString(_prefMyDisplayName, group.myDisplayName);
+    await _prefs.setString(_prefMyColor, group.myColor);
+    await _prefs.setString(
+      _prefGroupExpiresAt,
+      group.expiresAt.toIso8601String(),
+    );
+    await _prefs.setInt(_prefGroupMaxDevices, group.maxDevices);
+    state = state.copyWith(lastSavedGroup: group);
+  }
+
   Future<void> _activateGroupSession(GroupSummary group) async {
-    // 2. Fetch group info & check expiry
+    // Check group expiry ONLY if fetchGroupInfo returns a row or if group.expiresAt is in the past.
+    // Never fail if fetchGroupInfo returns null due to RLS on public.groups.
     final groupInfo = await _supabase.fetchGroupInfo(group.id);
-    if (groupInfo == null || groupInfo.isExpired) {
+    if ((groupInfo != null && groupInfo.isExpired) || group.isExpired) {
       await _clearLocalGroupData(group.id);
       state = state.copyWith(
         clearActiveGroup: true,
+        clearLastSavedGroup: true,
         isLoading: false,
         errorCode: 'group_expired',
       );
@@ -243,9 +311,14 @@ class AppController extends StateNotifier<AppState> {
     // 2. Members list: supabase.from('members').select('user_id, display_name, color').eq('group_id', groupId)
     final members = await _supabase.fetchGroupMembers(group.id);
 
+    final myUid = _supabase.currentUserId;
+    final defaultFollowed = members.isNotEmpty
+        ? members.map((m) => m.userId).toSet()
+        : (myUid != null ? {myUid} : <String>{});
+
     final savedFollowed =
         _prefs.getStringList('ft_followed_${group.id}')?.toSet() ??
-            members.map((m) => m.userId).toSet();
+            defaultFollowed;
 
     final cachedRaw = _prefs.getString('ft_cached_locs_${group.id}');
     List<MemberLocation> cached = [];
@@ -264,6 +337,7 @@ class AppController extends StateNotifier<AppState> {
 
     state = state.copyWith(
       activeGroup: group,
+      lastSavedGroup: group,
       groupMembers: members,
       followedUserIds: savedFollowed,
       cachedLocations: cached,
@@ -284,7 +358,9 @@ class AppController extends StateNotifier<AppState> {
     if (group == null) return;
     try {
       final members = await _supabase.fetchGroupMembers(group.id);
-      state = state.copyWith(groupMembers: members);
+      if (members.isNotEmpty) {
+        state = state.copyWith(groupMembers: members);
+      }
     } catch (_) {}
   }
 
@@ -309,7 +385,6 @@ class AppController extends StateNotifier<AppState> {
   }
 
   /// 4. Fetch others via RPC `fetch_locations(p_group_id, p_target_user_ids)`.
-  /// Server enforces cooldown (currently 180s) and returns JSON `{ok: ...}`.
   Future<void> fetchFollowedLocations() async {
     final group = state.activeGroup;
     if (group == null) return;
@@ -346,7 +421,6 @@ class AppController extends StateNotifier<AppState> {
       return;
     }
 
-    // Handle JSON failure {ok: false, error, remaining_seconds?}
     final err = result.errorCode ?? 'server_error';
     if (err == 'cooldown_active') {
       final rem = result.remainingSeconds ?? 180;
@@ -364,6 +438,7 @@ class AppController extends StateNotifier<AppState> {
       await _clearLocalGroupData(group.id);
       state = state.copyWith(
         clearActiveGroup: true,
+        clearLastSavedGroup: true,
         cachedLocations: [],
         groupMembers: [],
         cooldownRemainingSeconds: 0,
@@ -381,6 +456,14 @@ class AppController extends StateNotifier<AppState> {
 
   Future<void> _sendImmediateOwnPosition() async {
     try {
+      final serviceOn = await Geolocator.isLocationServiceEnabled();
+      if (!serviceOn) return;
+      final perm = await Geolocator.checkPermission();
+      if (perm != LocationPermission.always &&
+          perm != LocationPermission.whileInUse) {
+        return;
+      }
+
       final pos = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.medium,
@@ -429,6 +512,7 @@ class AppController extends StateNotifier<AppState> {
 
     state = state.copyWith(
       clearActiveGroup: true,
+      clearLastSavedGroup: true,
       cachedLocations: [],
       groupMembers: [],
       followedUserIds: {},
@@ -443,6 +527,8 @@ class AppController extends StateNotifier<AppState> {
     await _prefs.remove(_prefGroupId);
     await _prefs.remove(_prefMyDisplayName);
     await _prefs.remove(_prefMyColor);
+    await _prefs.remove(_prefGroupExpiresAt);
+    await _prefs.remove(_prefGroupMaxDevices);
     await _prefs.remove('ft_followed_$groupId');
     await _prefs.remove('ft_cached_locs_$groupId');
     await _prefs.remove('ft_cooldown_until_$groupId');

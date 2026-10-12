@@ -4,10 +4,11 @@
 
 ---
 
-## 1. Required Flutter Version
+## 1. Required Toolchain Versions
 
-- **Flutter SDK**: Latest stable (`>= 3.22.0`, Dart SDK `>= 3.4.0 < 4.0.0`)
-- **Android**: Android Studio / Android SDK (API 34+, `minSdkVersion 21`)
+- **Flutter SDK**: `>= 3.29.0` (e.g. `3.29.2` stable, Dart SDK `>= 3.7.0 < 4.0.0`)
+- **Java / JDK**: **Java 21** (Temurin 21, required by `maplibre_gl: ^0.27.1` and Android Gradle Plugin `8.7.3`)
+- **Kotlin & AGP**: Kotlin `2.1.0`, Android Gradle Plugin `8.7.3` (`compileSdk 35`, `targetSdk 35`, `minSdk 23`)
 - **iOS**: Xcode 15+ and CocoaPods (`iOS 14.0+`)
 
 ---
@@ -44,8 +45,11 @@ flutter pub get
 # Run on a connected device or emulator:
 flutter run --dart-define-from-file=config/env.json
 
-# Build Android APK:
-flutter build apk --dart-define-from-file=config/env.json
+# Build Split-per-ABI Android Release APKs:
+flutter build apk --release --split-per-abi --dart-define-from-file=config/env.json
+
+# Build Android Release AppBundle (AAB):
+flutter build appbundle --release --dart-define-from-file=config/env.json
 
 # Build iOS Release:
 flutter build ios --dart-define-from-file=config/env.json
@@ -66,6 +70,7 @@ flutter build ios --dart-define-from-file=config/env.json
 - **First-Launch Consent Flow**: On first launch, the app auto-detects Persian (`fa`, RTL) or English (`en`, LTR), displays a disclosure screen explaining background location sharing, and sequentially requests **When In Use** followed by **Always** location permission.
 - **Android (`android/app/src/main/AndroidManifest.xml`)**:
   - Declares `ACCESS_COARSE_LOCATION`, `ACCESS_FINE_LOCATION`, `ACCESS_BACKGROUND_LOCATION`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_LOCATION`, and `POST_NOTIFICATIONS`.
+  - Includes `xmlns:tools` and `tools:replace="android:exported"` on `id.flutter.flutter_background_service.BackgroundService`.
   - Declares `<queries>` for `https` and `geo` intents so `url_launcher` can open Google Maps or the system map chooser on Android 11+.
 - **iOS (`ios/Runner/Info.plist`)**:
   - Includes bilingual (English + Persian) usage descriptions for `NSLocationWhenInUseUsageDescription`, `NSLocationAlwaysAndWhenInUseUsageDescription`, and `NSLocationAlwaysUsageDescription`.

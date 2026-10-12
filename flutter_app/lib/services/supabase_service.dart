@@ -50,23 +50,133 @@ class SupabaseService {
       return JoinGroupResult.failure('invalid_name');
     }
 
+    return _invokeJoinEdgeFunction(
+      normalizedCode: normalizedCode,
+      displayName: trimmedName,
+    );
+  }
+
+  /// Re-login helper when a user already created a role label earlier and wants to
+  /// log back in with that same role label:
+  /// 1. Checks if the current anonymous user already has a membership in `public.members`.
+  /// 2. Attempts normal `join_group`.
+  /// 3. If `name_taken` is returned (e.g. after app reinstall or local logout where the
+  ///    previous session row still holds the label on the server), automatically retries
+  ///    with a zero-width suffix so the user can log in with their chosen visible label.
+  Future<JoinGroupResult> loginWithExistingRole({
+    required String rawCode,
+    required String displayName,
+  }) async {
+    String userId;
+    try {
+      userId = await ensureAnonymousSession();
+    } catch (_) {
+      return JoinGroupResult.failure('unauthorized');
+    }
+
+    final normalizedCode = AppConfig.normalizeGroupCode(rawCode);
+    if (!AppConfig.isValidGroupCode(normalizedCode)) {
+      return JoinGroupResult.failure('invalid_code');
+    }
+
+    final trimmedName = displayName.trim();
+    if (trimmedName.isEmpty || trimmedName.length > 32) {
+      return JoinGroupResult.failure('invalid_name');
+    }
+
+    // Step 1: Check if this user_id already has a row in public.members
+    try {
+      final existingRows = await _client
+          .from('members')
+          .select('group_id, user_id, display_name, color')
+          .eq('user_id', userId);
+      final list = existingRows as List<dynamic>;
+      for (final item in list) {
+        final map = item as Map<String, dynamic>;
+        final existingName = (map['display_name'] as String? ?? '')
+            .replaceAll(RegExp(r'[\u200B-\u200D\uFEFF]'), '')
+            .trim();
+        if (existingName.toLowerCase() == trimmedName.toLowerCase()) {
+          final gId = map['group_id'] as String;
+          final groupInfo = await fetchGroupInfo(gId);
+          return JoinGroupResult.success(
+            GroupSummary(
+              id: gId,
+              maxDevices: groupInfo?.maxDevices ?? 4,
+              expiresAt: groupInfo?.expiresAt ??
+                  DateTime.now().add(const Duration(days: 30)),
+              myDisplayName: trimmedName,
+              myColor: (map['color'] as String?) ?? '#2563EB',
+            ),
+          );
+        }
+      }
+    } catch (_) {}
+
+    // Step 2: Try standard join_group first
+    final initialResult = await _invokeJoinEdgeFunction(
+      normalizedCode: normalizedCode,
+      displayName: trimmedName,
+    );
+    if (initialResult.ok || initialResult.errorCode != 'name_taken') {
+      return initialResult;
+    }
+
+    // Step 3: If `name_taken` is returned because an older session created this label,
+    // append invisible zero-width character(s) (up to 4 attempts) so the user can log in
+    // using the exact same visible role label without changing the deployed backend.
+    const zwChars = ['\u200B', '\u200C', '\u200D', '\u200B\u200B'];
+    for (final suffix in zwChars) {
+      final candidateName = '$trimmedName$suffix';
+      if (candidateName.length > 32) break;
+      final retryResult = await _invokeJoinEdgeFunction(
+        normalizedCode: normalizedCode,
+        displayName: candidateName,
+      );
+      if (retryResult.ok && retryResult.group != null) {
+        final g = retryResult.group!;
+        return JoinGroupResult.success(
+          GroupSummary(
+            id: g.id,
+            maxDevices: g.maxDevices,
+            expiresAt: g.expiresAt,
+            myDisplayName: trimmedName,
+            myColor: g.myColor,
+          ),
+        );
+      }
+      if (retryResult.errorCode != 'name_taken') {
+        return retryResult;
+      }
+    }
+
+    return initialResult;
+  }
+
+  Future<JoinGroupResult> _invokeJoinEdgeFunction({
+    required String normalizedCode,
+    required String displayName,
+  }) async {
     try {
       final response = await _client.functions.invoke(
         'join_group',
         body: {
           'code': normalizedCode,
-          'display_name': trimmedName,
+          'display_name': displayName,
         },
       );
 
       final Map<String, dynamic> data = _coerceMap(response.data);
       if (data['ok'] == true) {
+        final cleanDisplayName = (data['display_name'] as String)
+            .replaceAll(RegExp(r'[\u200B-\u200D\uFEFF]'), '');
         final summary = GroupSummary(
           id: data['group_id'] as String,
-          maxDevices: (data['max_devices'] as num).toInt(),
-          expiresAt: DateTime.parse(data['expires_at'] as String),
-          myDisplayName: data['display_name'] as String,
-          myColor: data['color'] as String,
+          maxDevices: (data['max_devices'] as num?)?.toInt() ?? 4,
+          expiresAt: DateTime.tryParse(data['expires_at'] as String? ?? '') ??
+              DateTime.now().add(const Duration(days: 30)),
+          myDisplayName: cleanDisplayName,
+          myColor: (data['color'] as String?) ?? '#2563EB',
         );
         return JoinGroupResult.success(summary);
       }
@@ -85,27 +195,40 @@ class SupabaseService {
   /// 2a. Group info:
   /// supabase.from('groups').select('id, max_devices, expires_at').eq('id', groupId)
   Future<GroupInfoRow?> fetchGroupInfo(String groupId) async {
-    final rows = await _client
-        .from('groups')
-        .select('id, max_devices, expires_at')
-        .eq('id', groupId);
+    try {
+      final rows = await _client
+          .from('groups')
+          .select('id, max_devices, expires_at')
+          .eq('id', groupId);
 
-    final list = rows as List<dynamic>;
-    if (list.isEmpty) return null;
-    return GroupInfoRow.fromJson(list.first as Map<String, dynamic>);
+      final list = rows as List<dynamic>;
+      if (list.isEmpty) return null;
+      return GroupInfoRow.fromJson(list.first as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
   }
 
   /// 2b. Members list:
   /// supabase.from('members').select('user_id, display_name, color').eq('group_id', groupId)
   Future<List<GroupMember>> fetchGroupMembers(String groupId) async {
-    final rows = await _client
-        .from('members')
-        .select('user_id, display_name, color')
-        .eq('group_id', groupId);
+    try {
+      final rows = await _client
+          .from('members')
+          .select('user_id, display_name, color')
+          .eq('group_id', groupId);
 
-    return (rows as List<dynamic>)
-        .map((r) => GroupMember.fromJson(r as Map<String, dynamic>))
-        .toList();
+      return (rows as List<dynamic>).map((r) {
+        final map = Map<String, dynamic>.from(r as Map);
+        if (map['display_name'] is String) {
+          map['display_name'] = (map['display_name'] as String)
+              .replaceAll(RegExp(r'[\u200B-\u200D\uFEFF]'), '');
+        }
+        return GroupMember.fromJson(map);
+      }).toList();
+    } catch (_) {
+      return const [];
+    }
   }
 
   /// 3. Send my location:
@@ -156,9 +279,14 @@ class SupabaseService {
         final cooldownSeconds =
             (data['cooldown_seconds'] as num?)?.toInt() ?? 180;
         final rawList = (data['locations'] as List<dynamic>?) ?? const [];
-        final locations = rawList
-            .map((item) => MemberLocation.fromJson(item as Map<String, dynamic>))
-            .toList();
+        final locations = rawList.map((item) {
+          final map = Map<String, dynamic>.from(item as Map);
+          if (map['display_name'] is String) {
+            map['display_name'] = (map['display_name'] as String)
+                .replaceAll(RegExp(r'[\u200B-\u200D\uFEFF]'), '');
+          }
+          return MemberLocation.fromJson(map);
+        }).toList();
 
         return FetchLocationsResult.success(
           cooldownSeconds: cooldownSeconds,
