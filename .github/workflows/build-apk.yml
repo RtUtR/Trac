@@ -1,0 +1,44 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: flutter_app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Create env file from secrets
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          mkdir -p config
+          printf '{"SUPABASE_URL":"%s","SUPABASE_ANON_KEY":"%s"}' "$SUPABASE_URL" "$SUPABASE_ANON_KEY" > config/env.json
+
+      - run: flutter pub get
+
+      - run: flutter build apk --release --dart-define-from-file=config/env.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: familytrack-apk
+          path: flutter_app/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 14
