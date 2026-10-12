@@ -1,35 +1,116 @@
 // lib/services/supabase_service.dart
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/app_config.dart';
 import '../models/models.dart';
 
 class SupabaseService {
   final SupabaseClient _client;
+  final SharedPreferences _prefs;
 
-  SupabaseService(this._client);
+  static const String _prefMyUserId = 'ft_my_user_id';
+  static const String _prefAccessToken = 'ft_access_token';
+  static const String _prefRefreshToken = 'ft_refresh_token';
 
-  String? get currentUserId => _client.auth.currentUser?.id;
-
-  /// On first launch, calls supabase.auth.signInAnonymously() and keeps the session.
-  Future<String> ensureAnonymousSession() async {
-    final existing = _client.auth.currentSession;
-    if (existing != null && existing.user.id.isNotEmpty) {
-      return existing.user.id;
-    }
-    final response = await _client.auth.signInAnonymously();
-    final user = response.user;
-    if (user == null) {
-      throw Exception('unauthorized');
-    }
-    return user.id;
+  SupabaseService(this._client, this._prefs) {
+    _initAuthListener();
   }
 
-  /// 1. Join: call the Edge Function "join_group" with body {code, display_name}.
-  /// - Success response: {ok: true, group_id, max_devices, expires_at, display_name, color}
-  /// - Failure response: {ok: false, error} where error is one of:
-  ///   invalid_name, too_many_attempts, invalid_code, group_expired, group_full,
-  ///   name_taken, unauthorized, bad_request, server_error.
+  void _initAuthListener() {
+    _client.auth.onAuthStateChange.listen((data) {
+      final session = data.session;
+      if (session != null) {
+        _persistSessionTokens(session);
+      }
+    });
+  }
+
+  Future<void> _persistSessionTokens(Session session) async {
+    try {
+      await _prefs.setString(_prefMyUserId, session.user.id);
+      if (session.accessToken.isNotEmpty) {
+        await _prefs.setString(_prefAccessToken, session.accessToken);
+      }
+      final refresh = session.refreshToken;
+      if (refresh != null && refresh.isNotEmpty) {
+        await _prefs.setString(_prefRefreshToken, refresh);
+      }
+    } catch (_) {}
+  }
+
+  String? get currentUserId =>
+      _client.auth.currentUser?.id ?? _prefs.getString(_prefMyUserId);
+
+  /// On first launch or when needed, ensures a valid anonymous session exists.
+  /// If the current session exists and is valid, returns the user ID and keeps the session.
+  /// If the session is expired, refreshes it.
+  /// If in-memory session is null, attempts recovery via saved refresh token.
+  /// ONLY signs in anonymously if no session has ever been created on this device.
+  Future<String> ensureAnonymousSession() async {
+    final existing = _client.auth.currentSession;
+    if (existing != null && !existing.isExpired && existing.user.id.isNotEmpty) {
+      await _persistSessionTokens(existing);
+      return existing.user.id;
+    }
+
+    if (existing != null && existing.isExpired) {
+      try {
+        final refreshRes = await _client.auth.refreshSession();
+        final refreshedSession = refreshRes.session;
+        if (refreshedSession != null) {
+          await _persistSessionTokens(refreshedSession);
+          return refreshedSession.user.id;
+        }
+      } catch (e) {
+        debugPrint('Session refresh failed: $e');
+      }
+    }
+
+    // Try recovering via saved refresh token from SharedPreferences
+    final savedRefreshToken = _prefs.getString(_prefRefreshToken);
+    if (savedRefreshToken != null && savedRefreshToken.isNotEmpty) {
+      try {
+        final authRes = await _client.auth.setSession(savedRefreshToken);
+        final restoredSession = authRes.session;
+        if (restoredSession != null) {
+          await _persistSessionTokens(restoredSession);
+          return restoredSession.user.id;
+        }
+      } catch (e) {
+        debugPrint('setSession with saved refresh token failed: $e');
+      }
+    }
+
+    // Only sign in anonymously if there is no user session saved yet
+    final existingUserId = _prefs.getString(_prefMyUserId);
+    if (existingUserId == null || existingUserId.isEmpty) {
+      try {
+        final response = await _client.auth.signInAnonymously();
+        final session = response.session;
+        if (session != null) {
+          await _persistSessionTokens(session);
+          return session.user.id;
+        }
+      } catch (e) {
+        debugPrint('signInAnonymously failed: $e');
+      }
+    }
+
+    final fallback = _client.auth.currentSession?.user.id ??
+        _prefs.getString(_prefMyUserId);
+    if (fallback != null && fallback.isNotEmpty) {
+      return fallback;
+    }
+
+    throw Exception('unauthorized');
+  }
+
+  /// 1. Join: calls Edge Function "join_group" with body {code, display_name}.
+  /// - Includes Bearer JWT token in Authorization header so the server can authenticate.
+  /// - Normalizes Persian/Arabic digits, strips hyphens and spaces.
+  /// - Returns JoinGroupResult with parsed summary or error code.
   Future<JoinGroupResult> joinGroup({
     required String rawCode,
     required String displayName,
@@ -56,13 +137,10 @@ class SupabaseService {
     );
   }
 
-  /// Re-login helper when a user already created a role label earlier and wants to
-  /// log back in with that same role label:
-  /// 1. Checks if the current anonymous user already has a membership in `public.members`.
-  /// 2. Attempts normal `join_group`.
-  /// 3. If `name_taken` is returned (e.g. after app reinstall or local logout where the
-  ///    previous session row still holds the label on the server), automatically retries
-  ///    with a zero-width suffix so the user can log in with their chosen visible label.
+  /// Re-login helper when a user already joined a group earlier on this device:
+  /// 1. Checks if current anonymous user_id already has a row in `public.members`.
+  ///    If yes, immediately returns the group summary without calling join_group.
+  /// 2. If not, invokes `join_group` once with the normalized credentials.
   Future<JoinGroupResult> loginWithExistingRole({
     required String rawCode,
     required String displayName,
@@ -84,7 +162,7 @@ class SupabaseService {
       return JoinGroupResult.failure('invalid_name');
     }
 
-    // Step 1: Check if this user_id already has a row in public.members
+    // Check if this user_id already has an active membership in public.members
     try {
       final existingRows = await _client
           .from('members')
@@ -113,53 +191,33 @@ class SupabaseService {
       }
     } catch (_) {}
 
-    // Step 2: Try standard join_group first
-    final initialResult = await _invokeJoinEdgeFunction(
+    // Otherwise invoke join_group once
+    return _invokeJoinEdgeFunction(
       normalizedCode: normalizedCode,
       displayName: trimmedName,
     );
-    if (initialResult.ok || initialResult.errorCode != 'name_taken') {
-      return initialResult;
-    }
-
-    // Step 3: If `name_taken` is returned because an older session created this label,
-    // append invisible zero-width character(s) (up to 4 attempts) so the user can log in
-    // using the exact same visible role label without changing the deployed backend.
-    const zwChars = ['\u200B', '\u200C', '\u200D', '\u200B\u200B'];
-    for (final suffix in zwChars) {
-      final candidateName = '$trimmedName$suffix';
-      if (candidateName.length > 32) break;
-      final retryResult = await _invokeJoinEdgeFunction(
-        normalizedCode: normalizedCode,
-        displayName: candidateName,
-      );
-      if (retryResult.ok && retryResult.group != null) {
-        final g = retryResult.group!;
-        return JoinGroupResult.success(
-          GroupSummary(
-            id: g.id,
-            maxDevices: g.maxDevices,
-            expiresAt: g.expiresAt,
-            myDisplayName: trimmedName,
-            myColor: g.myColor,
-          ),
-        );
-      }
-      if (retryResult.errorCode != 'name_taken') {
-        return retryResult;
-      }
-    }
-
-    return initialResult;
   }
 
   Future<JoinGroupResult> _invokeJoinEdgeFunction({
     required String normalizedCode,
     required String displayName,
+    bool isRetry = false,
   }) async {
     try {
+      final session = _client.auth.currentSession;
+      final accessToken = session?.accessToken ?? _prefs.getString(_prefAccessToken);
+
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+        if (accessToken != null && accessToken.isNotEmpty)
+          'Authorization': 'Bearer $accessToken',
+        if (AppConfig.supabaseAnonKey.isNotEmpty)
+          'apikey': AppConfig.supabaseAnonKey,
+      };
+
       final response = await _client.functions.invoke(
         'join_group',
+        headers: headers,
         body: {
           'code': normalizedCode,
           'display_name': displayName,
@@ -168,10 +226,11 @@ class SupabaseService {
 
       final Map<String, dynamic> data = _coerceMap(response.data);
       if (data['ok'] == true) {
-        final cleanDisplayName = (data['display_name'] as String)
-            .replaceAll(RegExp(r'[\u200B-\u200D\uFEFF]'), '');
+        final cleanDisplayName =
+            (data['display_name'] as String? ?? displayName)
+                .replaceAll(RegExp(r'[\u200B-\u200D\uFEFF]'), '');
         final summary = GroupSummary(
-          id: data['group_id'] as String,
+          id: (data['group_id'] as String?) ?? '',
           maxDevices: (data['max_devices'] as num?)?.toInt() ?? 4,
           expiresAt: DateTime.tryParse(data['expires_at'] as String? ?? '') ??
               DateTime.now().add(const Duration(days: 30)),
@@ -181,15 +240,81 @@ class SupabaseService {
         return JoinGroupResult.success(summary);
       }
 
-      final errorCode = (data['error'] as String?) ?? 'server_error';
+      final errorCode = _extractErrorCode(data, null);
+      if (errorCode == 'unauthorized' && !isRetry) {
+        try {
+          await ensureAnonymousSession();
+          return _invokeJoinEdgeFunction(
+            normalizedCode: normalizedCode,
+            displayName: displayName,
+            isRetry: true,
+          );
+        } catch (_) {}
+      }
+
       return JoinGroupResult.failure(errorCode);
     } on FunctionException catch (e) {
       final Map<String, dynamic> details = _coerceMap(e.details);
-      final errorCode = (details['error'] as String?) ?? 'server_error';
+      final errorCode = _extractErrorCode(details, e);
+
+      if (errorCode == 'unauthorized' && !isRetry) {
+        try {
+          await ensureAnonymousSession();
+          return _invokeJoinEdgeFunction(
+            normalizedCode: normalizedCode,
+            displayName: displayName,
+            isRetry: true,
+          );
+        } catch (_) {}
+      }
+
       return JoinGroupResult.failure(errorCode);
-    } catch (_) {
+    } catch (e) {
+      debugPrint('Unexpected join_group exception: $e');
       return JoinGroupResult.failure('server_error');
     }
+  }
+
+  String _extractErrorCode(Map<String, dynamic> data, FunctionException? fe) {
+    if (data['error'] is String && (data['error'] as String).isNotEmpty) {
+      return data['error'] as String;
+    }
+    if (data['message'] is String && (data['message'] as String).isNotEmpty) {
+      final msg = (data['message'] as String).toLowerCase();
+      for (final code in [
+        'invalid_name',
+        'too_many_attempts',
+        'invalid_code',
+        'group_expired',
+        'group_full',
+        'name_taken',
+        'unauthorized',
+        'bad_request',
+      ]) {
+        if (msg.contains(code)) return code;
+      }
+    }
+    if (fe != null) {
+      if (fe.status == 429) return 'too_many_attempts';
+      if (fe.status == 401 || fe.status == 403) return 'unauthorized';
+      if (fe.status == 400) return 'bad_request';
+      if (fe.details is String) {
+        final str = (fe.details as String).toLowerCase();
+        for (final code in [
+          'invalid_name',
+          'too_many_attempts',
+          'invalid_code',
+          'group_expired',
+          'group_full',
+          'name_taken',
+          'unauthorized',
+          'bad_request',
+        ]) {
+          if (str.contains(code)) return code;
+        }
+      }
+    }
+    return 'server_error';
   }
 
   /// 2a. Group info:
@@ -251,9 +376,6 @@ class SupabaseService {
   /// 4. Fetch others:
   /// supabase.rpc('fetch_locations', params: {'p_group_id': groupId, 'p_target_user_ids': [selected member ids]})
   /// Do NOT send a cooldown value; the server enforces it (currently 180 seconds).
-  /// Response is JSON, not an exception:
-  /// - success: {ok: true, cooldown_seconds, locations: [{user_id, display_name, color, lat, lng, accuracy, updated_at}]}
-  /// - failure: {ok: false, error, remaining_seconds?}
   Future<FetchLocationsResult> fetchLocations({
     required String groupId,
     required List<String> targetUserIds,

@@ -96,7 +96,7 @@ export const DELIVERABLE_FILES: DeliverableFile[] = [
     category: 'dart',
     language: 'dart',
     summary:
-      'Riverpod state controller calling BackgroundLocationService.startIfPermitted() only after runtime location permissions are verified.',
+      'Riverpod state controller managing active group sessions, persistent 2-minute (120s) login cooldown ticker upon too_many_attempts, and calling BackgroundLocationService.startIfPermitted() only after runtime location permissions are verified.',
     content: appProvidersRaw,
   },
   {
@@ -106,7 +106,7 @@ export const DELIVERABLE_FILES: DeliverableFile[] = [
     category: 'dart',
     language: 'dart',
     summary:
-      'Client calls to the deployed Supabase backend: signInAnonymously(), join_group {code, display_name}, members/groups queries, location upsert (without updated_at), JSON fetch_locations RPC, and leave_group.',
+      'Client calls to the deployed Supabase backend: passes explicit Authorization Bearer JWT header and apikey to join_group Edge Function, refreshes expired sessions automatically, extracts HTTP 429 too_many_attempts and HTTP 400 bad_request accurately, and performs JSON fetch_locations RPC.',
     content: supabaseServiceRaw,
   },
   {
@@ -126,7 +126,7 @@ export const DELIVERABLE_FILES: DeliverableFile[] = [
     category: 'dart',
     language: 'dart',
     summary:
-      'GroupCodeInputFormatter (XXXX-XXXX-XXXX, uppercase, Persian/Arabic digit conversion) and localized error display for all 9 join_group error codes.',
+      'GroupCodeInputFormatter (XXXX-XXXX-XXXX, uppercase, Persian/Arabic digit conversion), live 2-minute cooldown timer display on rate-limit, disabled button with mm:ss countdown, and localized error messages.',
     content: loginScreenRaw,
   },
   {

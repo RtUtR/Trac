@@ -16,7 +16,8 @@ final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
 });
 
 final supabaseServiceProvider = Provider<SupabaseService>((ref) {
-  return SupabaseService(Supabase.instance.client);
+  final prefs = ref.watch(sharedPreferencesProvider);
+  return SupabaseService(Supabase.instance.client, prefs);
 });
 
 class AppState {
@@ -28,8 +29,10 @@ class AppState {
   final Set<String> followedUserIds;
   final List<MemberLocation> cachedLocations;
   final int cooldownRemainingSeconds;
+  final int loginCooldownRemainingSeconds;
   final MapStyleOption? userSelectedMapStyle;
   final bool isLoading;
+  final bool isBootstrapping;
   final String? errorCode;
 
   const AppState({
@@ -41,8 +44,10 @@ class AppState {
     this.followedUserIds = const {},
     this.cachedLocations = const [],
     this.cooldownRemainingSeconds = 0,
+    this.loginCooldownRemainingSeconds = 0,
     this.userSelectedMapStyle,
     this.isLoading = false,
+    this.isBootstrapping = false,
     this.errorCode,
   });
 
@@ -65,8 +70,10 @@ class AppState {
     Set<String>? followedUserIds,
     List<MemberLocation>? cachedLocations,
     int? cooldownRemainingSeconds,
+    int? loginCooldownRemainingSeconds,
     MapStyleOption? userSelectedMapStyle,
     bool? isLoading,
+    bool? isBootstrapping,
     String? errorCode,
     bool clearErrorCode = false,
   }) {
@@ -82,8 +89,11 @@ class AppState {
       cachedLocations: cachedLocations ?? this.cachedLocations,
       cooldownRemainingSeconds:
           cooldownRemainingSeconds ?? this.cooldownRemainingSeconds,
+      loginCooldownRemainingSeconds:
+          loginCooldownRemainingSeconds ?? this.loginCooldownRemainingSeconds,
       userSelectedMapStyle: userSelectedMapStyle ?? this.userSelectedMapStyle,
       isLoading: isLoading ?? this.isLoading,
+      isBootstrapping: isBootstrapping ?? this.isBootstrapping,
       errorCode: clearErrorCode ? null : (errorCode ?? this.errorCode),
     );
   }
@@ -93,6 +103,7 @@ class AppController extends StateNotifier<AppState> {
   final SharedPreferences _prefs;
   final SupabaseService _supabase;
   Timer? _cooldownTimer;
+  Timer? _loginCooldownTimer;
 
   static const _prefConsent = 'ft_consent_accepted';
   static const _prefMapStyle = 'ft_map_style';
@@ -101,13 +112,20 @@ class AppController extends StateNotifier<AppState> {
   static const _prefMyColor = 'ft_my_color';
   static const _prefGroupExpiresAt = 'ft_group_expires_at';
   static const _prefGroupMaxDevices = 'ft_group_max_devices';
+  static const _prefLoginCooldownUntil = 'ft_login_cooldown_until';
+  static const _prefMyUserId = 'ft_my_user_id';
 
   AppController(this._prefs, this._supabase)
       : super(
           AppState(
             consentAccepted: _prefs.getBool(_prefConsent) ?? false,
             locationPermissionGranted: false,
+            // Synchronously restore activeGroup from SharedPreferences on frame 1
+            // so the app opens directly to MapScreen without ever flashing the login screen.
+            activeGroup: _readSavedGroupSummaryStatic(_prefs),
+            lastSavedGroup: _readSavedGroupSummaryStatic(_prefs),
             userSelectedMapStyle: _parseStyle(_prefs.getString(_prefMapStyle)),
+            isBootstrapping: true,
           ),
         ) {
     _bootstrap();
@@ -121,21 +139,22 @@ class AppController extends StateNotifier<AppState> {
     return null;
   }
 
-  GroupSummary? _readSavedGroupSummary() {
-    final savedGroupId = _prefs.getString(_prefGroupId);
-    final savedDisplayName = _prefs.getString(_prefMyDisplayName);
-    final savedColor = _prefs.getString(_prefMyColor);
+  static GroupSummary? _readSavedGroupSummaryStatic(SharedPreferences prefs) {
+    final savedGroupId = prefs.getString(_prefGroupId);
+    final savedDisplayName = prefs.getString(_prefMyDisplayName);
+    final savedColor = prefs.getString(_prefMyColor);
     if (savedGroupId == null ||
+        savedGroupId.isEmpty ||
         savedDisplayName == null ||
         savedColor == null) {
       return null;
     }
-    final savedExpiresRaw = _prefs.getString(_prefGroupExpiresAt);
+    final savedExpiresRaw = prefs.getString(_prefGroupExpiresAt);
     final expiresAt = (savedExpiresRaw != null
             ? DateTime.tryParse(savedExpiresRaw)
             : null) ??
         DateTime.now().add(const Duration(days: 30));
-    final maxDevices = _prefs.getInt(_prefGroupMaxDevices) ?? 4;
+    final maxDevices = prefs.getInt(_prefGroupMaxDevices) ?? 4;
 
     return GroupSummary(
       id: savedGroupId,
@@ -146,29 +165,43 @@ class AppController extends StateNotifier<AppState> {
     );
   }
 
+  GroupSummary? _readSavedGroupSummary() =>
+      _readSavedGroupSummaryStatic(_prefs);
+
   Future<void> _bootstrap() async {
+    try {
+      await _prefs.reload();
+    } catch (_) {}
+
     await refreshPermissionStatus();
 
     try {
       await _supabase.ensureAnonymousSession();
     } catch (_) {}
 
-    final savedSummary = _readSavedGroupSummary();
-    if (savedSummary != null) {
-      state = state.copyWith(lastSavedGroup: savedSummary);
+    // Check for active login cooldown (e.g. from previous too_many_attempts)
+    final loginCooldownUntilMs = _prefs.getInt(_prefLoginCooldownUntil) ?? 0;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final loginRem =
+        ((loginCooldownUntilMs - nowMs) / 1000).ceil().clamp(0, 7200);
+    if (loginRem > 0) {
+      _startLoginCooldownTicker(loginRem);
     }
 
-    if (!state.consentAccepted) return;
-    if (savedSummary == null) return;
+    final savedSummary = _readSavedGroupSummary();
+    if (!state.consentAccepted || savedSummary == null) {
+      state = state.copyWith(isBootstrapping: false);
+      return;
+    }
 
-    state = state.copyWith(isLoading: true, clearErrorCode: true);
+    // Check expiry silently in background without taking user to login screen unless expired
     try {
-      // Check group info if accessible via RLS; do NOT clear group if RLS returns null
       final groupInfo = await _supabase.fetchGroupInfo(savedSummary.id);
       if (groupInfo != null && groupInfo.isExpired) {
         await _clearLocalGroupData(savedSummary.id);
         state = state.copyWith(
           isLoading: false,
+          isBootstrapping: false,
           clearActiveGroup: true,
           clearLastSavedGroup: true,
           errorCode: 'group_expired',
@@ -184,12 +217,20 @@ class AppController extends StateNotifier<AppState> {
         myColor: savedSummary.myColor,
       );
 
-      await _activateGroupSession(effectiveSummary);
+      await _activateGroupSession(effectiveSummary, silent: true);
       if (state.locationPermissionGranted) {
         await BackgroundLocationService.startIfPermitted();
       }
     } catch (_) {
-      state = state.copyWith(isLoading: false);
+      // Offline: keep cached active group session intact
+      if (state.activeGroup == null) {
+        state = state.copyWith(
+          activeGroup: savedSummary,
+          lastSavedGroup: savedSummary,
+        );
+      }
+    } finally {
+      state = state.copyWith(isBootstrapping: false);
     }
   }
 
@@ -231,14 +272,15 @@ class AppController extends StateNotifier<AppState> {
     }
   }
 
-  /// 1. Join as new member OR Login with existing role label.
-  /// If `isExistingLogin` is true (or if user taps Login with Existing Role),
-  /// allows logging back in with an already-created role label.
+  /// 1. Join or Log In to group.
   Future<bool> joinGroup({
     required String code,
     required String displayName,
     bool isExistingLogin = false,
   }) async {
+    // If login cooldown is currently active, prevent spamming the server
+    if (state.loginCooldownRemainingSeconds > 0) return false;
+
     state = state.copyWith(isLoading: true, clearErrorCode: true);
 
     final result = isExistingLogin
@@ -252,9 +294,13 @@ class AppController extends StateNotifier<AppState> {
           );
 
     if (!result.ok || result.group == null) {
+      final err = result.errorCode ?? 'server_error';
+      if (err == 'too_many_attempts') {
+        _startLoginCooldownTicker(120);
+      }
       state = state.copyWith(
         isLoading: false,
-        errorCode: result.errorCode ?? 'server_error',
+        errorCode: err,
       );
       return false;
     }
@@ -281,7 +327,37 @@ class AppController extends StateNotifier<AppState> {
     }
   }
 
+  void _startLoginCooldownTicker(int seconds) {
+    _loginCooldownTimer?.cancel();
+    final untilMs = DateTime.now().millisecondsSinceEpoch + (seconds * 1000);
+    _prefs.setInt(_prefLoginCooldownUntil, untilMs);
+
+    state = state.copyWith(
+      loginCooldownRemainingSeconds: seconds,
+      errorCode: 'too_many_attempts',
+    );
+
+    _loginCooldownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      final rem =
+          ((untilMs - DateTime.now().millisecondsSinceEpoch) / 1000).ceil();
+      if (rem <= 0) {
+        timer.cancel();
+        _prefs.remove(_prefLoginCooldownUntil);
+        state = state.copyWith(
+          loginCooldownRemainingSeconds: 0,
+          clearErrorCode: state.errorCode == 'too_many_attempts',
+        );
+      } else {
+        state = state.copyWith(loginCooldownRemainingSeconds: rem);
+      }
+    });
+  }
+
   Future<void> _saveLocalGroupSummary(GroupSummary group) async {
+    final uid = _supabase.currentUserId;
+    if (uid != null && uid.isNotEmpty) {
+      await _prefs.setString(_prefMyUserId, uid);
+    }
     await _prefs.setString(_prefGroupId, group.id);
     await _prefs.setString(_prefMyDisplayName, group.myDisplayName);
     await _prefs.setString(_prefMyColor, group.myColor);
@@ -290,28 +366,33 @@ class AppController extends StateNotifier<AppState> {
       group.expiresAt.toIso8601String(),
     );
     await _prefs.setInt(_prefGroupMaxDevices, group.maxDevices);
-    state = state.copyWith(lastSavedGroup: group);
+    state = state.copyWith(
+      activeGroup: group,
+      lastSavedGroup: group,
+    );
   }
 
-  Future<void> _activateGroupSession(GroupSummary group) async {
-    // Check group expiry ONLY if fetchGroupInfo returns a row or if group.expiresAt is in the past.
-    // Never fail if fetchGroupInfo returns null due to RLS on public.groups.
-    final groupInfo = await _supabase.fetchGroupInfo(group.id);
-    if ((groupInfo != null && groupInfo.isExpired) || group.isExpired) {
-      await _clearLocalGroupData(group.id);
-      state = state.copyWith(
-        clearActiveGroup: true,
-        clearLastSavedGroup: true,
-        isLoading: false,
-        errorCode: 'group_expired',
-      );
-      return;
-    }
+  Future<void> _activateGroupSession(
+    GroupSummary group, {
+    bool silent = false,
+  }) async {
+    try {
+      final groupInfo = await _supabase.fetchGroupInfo(group.id);
+      if (groupInfo != null && groupInfo.isExpired) {
+        await _clearLocalGroupData(group.id);
+        state = state.copyWith(
+          clearActiveGroup: true,
+          clearLastSavedGroup: true,
+          isLoading: false,
+          errorCode: 'group_expired',
+        );
+        return;
+      }
+    } catch (_) {}
 
-    // 2. Members list: supabase.from('members').select('user_id, display_name, color').eq('group_id', groupId)
     final members = await _supabase.fetchGroupMembers(group.id);
 
-    final myUid = _supabase.currentUserId;
+    final myUid = _supabase.currentUserId ?? _prefs.getString(_prefMyUserId);
     final defaultFollowed = members.isNotEmpty
         ? members.map((m) => m.userId).toSet()
         : (myUid != null ? {myUid} : <String>{});
@@ -348,7 +429,7 @@ class AppController extends StateNotifier<AppState> {
 
     if (remaining > 0) {
       _startCooldownTicker(group.id, remaining);
-    } else {
+    } else if (!silent) {
       await fetchFollowedLocations();
     }
   }
@@ -432,9 +513,34 @@ class AppController extends StateNotifier<AppState> {
       return;
     }
 
-    if (err == 'group_expired' ||
-        err == 'not_a_member' ||
-        err == 'not_authenticated') {
+    // If 'not_authenticated', recover session without kicking user to login screen!
+    if (err == 'not_authenticated') {
+      try {
+        await _supabase.ensureAnonymousSession();
+        final retryResult = await _supabase.fetchLocations(
+          groupId: group.id,
+          targetUserIds: targets,
+        );
+        if (retryResult.ok) {
+          final cooldownSec = retryResult.cooldownSeconds ?? 180;
+          await _prefs.setString(
+            'ft_cached_locs_${group.id}',
+            jsonEncode(retryResult.locations.map((l) => l.toJson()).toList()),
+          );
+          if (cooldownSec > 0) {
+            _startCooldownTicker(group.id, cooldownSec);
+          }
+          state = state.copyWith(
+            cachedLocations: retryResult.locations,
+            cooldownRemainingSeconds: cooldownSec,
+            isLoading: false,
+          );
+          return;
+        }
+      } catch (_) {}
+    }
+
+    if (err == 'group_expired' || err == 'not_a_member') {
       await _clearLocalGroupData(group.id);
       state = state.copyWith(
         clearActiveGroup: true,
@@ -464,17 +570,25 @@ class AppController extends StateNotifier<AppState> {
         return;
       }
 
-      final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.medium,
-          timeLimit: Duration(seconds: 10),
-        ),
-      );
-      await _supabase.upsertOwnLocation(
-        lat: pos.latitude,
-        lng: pos.longitude,
-        accuracy: pos.accuracy,
-      );
+      Position? pos;
+      try {
+        pos = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 10),
+          ),
+        );
+      } catch (_) {
+        pos = await Geolocator.getLastKnownPosition();
+      }
+
+      if (pos != null) {
+        await _supabase.upsertOwnLocation(
+          lat: pos.latitude,
+          lng: pos.longitude,
+          accuracy: pos.accuracy,
+        );
+      }
     } catch (_) {}
   }
 
@@ -496,8 +610,7 @@ class AppController extends StateNotifier<AppState> {
     });
   }
 
-  /// 5. Exit: supabase.rpc('leave_group', params: {'p_group_id': groupId}),
-  /// clear local data, go to the login screen.
+  /// 5. Exit: supabase.rpc('leave_group', params: {'p_group_id': groupId})
   Future<void> exitCurrentGroup() async {
     final group = state.activeGroup;
     if (group == null) return;
@@ -532,6 +645,13 @@ class AppController extends StateNotifier<AppState> {
     await _prefs.remove('ft_followed_$groupId');
     await _prefs.remove('ft_cached_locs_$groupId');
     await _prefs.remove('ft_cooldown_until_$groupId');
+  }
+
+  @override
+  void dispose() {
+    _cooldownTimer?.cancel();
+    _loginCooldownTimer?.cancel();
+    super.dispose();
   }
 }
 

@@ -1,4 +1,5 @@
 // lib/screens/login_screen.dart
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -44,6 +45,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   }
 
   Future<void> _submit({required bool isExistingLogin}) async {
+    final state = ref.read(appControllerProvider);
+    if (state.loginCooldownRemainingSeconds > 0) return;
+
     final normalizedCode = AppConfig.normalizeGroupCode(_codeController.text);
     final role = _roleController.text.trim();
     if (normalizedCode.isEmpty || role.isEmpty) return;
@@ -55,11 +59,18 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         );
   }
 
+  String _formatCooldown(int seconds) {
+    final m = (seconds ~/ 60).toString().padLeft(2, '0');
+    final s = (seconds % 60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final state = ref.watch(appControllerProvider);
     final theme = Theme.of(context);
+    final isCooldownActive = state.loginCooldownRemainingSeconds > 0;
 
     return Scaffold(
       appBar: AppBar(
@@ -88,7 +99,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               if (state.lastSavedGroup != null) ...[
                 const SizedBox(height: 20),
                 OutlinedButton.icon(
-                  onPressed: state.isLoading
+                  onPressed: state.isLoading || isCooldownActive
                       ? null
                       : () => ref
                           .read(appControllerProvider.notifier)
@@ -109,12 +120,62 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   ),
                 ),
               ],
-              if (state.errorCode != null) ...[
+
+              // 2-Minute Cooldown Alert Banner
+              if (isCooldownActive) ...[
+                const SizedBox(height: 20),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.onSurface.withOpacity(0.06),
+                    border: Border.all(
+                      color: theme.colorScheme.onSurface,
+                      width: 1.5,
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.timer_outlined,
+                        size: 26,
+                        color: theme.colorScheme.onSurface,
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              l10n.tr(
+                                'err_too_many_attempts_cooldown',
+                                params: {
+                                  'time': _formatCooldown(
+                                      state.loginCooldownRemainingSeconds)
+                                },
+                              ),
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                fontWeight: FontWeight.w600,
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures()
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ] else if (state.errorCode != null) ...[
                 const SizedBox(height: 20),
                 Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    border: Border.all(color: theme.colorScheme.onSurface),
+                    border: Border.all(
+                      color: theme.colorScheme.onSurface.withOpacity(0.6),
+                    ),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Text(
@@ -125,6 +186,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   ),
                 ),
               ],
+
               const SizedBox(height: 28),
               // Group Code field (always LTR for XXXX-XXXX-XXXX readability)
               Directionality(
@@ -157,11 +219,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   hintText: l10n.tr('role_hint'),
                   border: const OutlineInputBorder(),
                 ),
+                onSubmitted: (_) {
+                  if (!isCooldownActive && !state.isLoading) {
+                    _submit(isExistingLogin: false);
+                  }
+                },
               ),
               const SizedBox(height: 28),
-              // Primary Button: Join as New Member
+              // Primary Button: Join or Log In to Group
               FilledButton(
-                onPressed: state.isLoading
+                onPressed: (state.isLoading || isCooldownActive)
                     ? null
                     : () => _submit(isExistingLogin: false),
                 style: FilledButton.styleFrom(
@@ -171,26 +238,35 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   ),
                 ),
                 child: Text(
-                  state.isLoading
-                      ? l10n.tr('joining')
-                      : l10n.tr('join_button'),
+                  isCooldownActive
+                      ? l10n.tr(
+                          'wait_cooldown',
+                          params: {
+                            'time': _formatCooldown(
+                                state.loginCooldownRemainingSeconds)
+                          },
+                        )
+                      : state.isLoading
+                          ? l10n.tr('joining')
+                          : l10n.tr('join_button'),
                   style: const TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
+                    fontFeatures: [FontFeature.tabularFigures()],
                   ),
                 ),
               ),
               const SizedBox(height: 12),
-              // Secondary Button: Log In with Existing Role (solves "label is already in use")
+              // Secondary Button: Check My Existing Role
               OutlinedButton.icon(
-                onPressed: state.isLoading
+                onPressed: (state.isLoading || isCooldownActive)
                     ? null
                     : () => _submit(isExistingLogin: true),
-                icon: const Icon(Icons.person_outline, size: 18),
+                icon: const Icon(Icons.person_search_outlined, size: 18),
                 style: OutlinedButton.styleFrom(
                   minimumSize: const Size.fromHeight(50),
                   side: BorderSide(
-                    color: theme.colorScheme.onSurface.withOpacity(0.5),
+                    color: theme.colorScheme.onSurface.withOpacity(0.4),
                   ),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10),

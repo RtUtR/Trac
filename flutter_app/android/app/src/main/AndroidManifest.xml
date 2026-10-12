@@ -1,7 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools"
-    package="com.example.family_track"
-    >
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Network & Foreground/Background Location Permissions -->
     <uses-permission android:name="android.permission.INTERNET" />

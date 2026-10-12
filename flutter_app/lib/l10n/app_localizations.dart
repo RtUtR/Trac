@@ -42,10 +42,10 @@ class AppLocalizations {
       'code_hint': 'XXXX-XXXX-XXXX',
       'role_label': 'Your Role in Group',
       'role_hint': 'e.g. Mother, Brother, Father',
-      'join_button': 'Join as New Member',
-      'login_existing_button': 'Log In with Existing Role',
+      'join_button': 'Join or Log In to Group',
+      'login_existing_button': 'Check My Existing Role',
       'login_existing_hint':
-          'Already created your role label earlier? Tap "Log In with Existing Role" to sign back in with the same label.',
+          'Already joined this group on this phone before? Tap "Check My Existing Role" to restore your session.',
       'resume_saved_group': 'Continue as {role}',
       'joining': 'Connecting...',
       'refresh': 'Refresh',
@@ -69,11 +69,14 @@ class AppLocalizations {
           'Location permission or GPS is off. Background sharing is paused until re-enabled.',
       'no_followed_members':
           'Select at least one member in People to view locations.',
+      'wait_cooldown': 'Please wait {time}',
       // Exact localized error codes from join_group & fetch_locations
       'err_invalid_name':
           'Please enter a valid role label (between 1 and 32 characters).',
       'err_too_many_attempts':
-          'Too many failed attempts. Please wait a few minutes and try again.',
+          'Too many failed attempts. Please wait 2 minutes and try again.',
+      'err_too_many_attempts_cooldown':
+          'Too many failed attempts. Please wait {time} before trying again.',
       'err_invalid_code':
           'Invalid group code. Please check the 12-character code and try again.',
       'err_group_expired':
@@ -81,11 +84,11 @@ class AppLocalizations {
       'err_group_full':
           'This group has reached its maximum number of member devices.',
       'err_name_taken':
-          'This role label is already in use. If it is your own role, tap "Log In with Existing Role" below.',
+          'This role label is already taken in this group. Please choose another name (e.g. Dad 2, Mom Phone).',
       'err_unauthorized':
           'Session authorization failed. Please try again.',
       'err_bad_request':
-          'Invalid request format. Please check your code and role label.',
+          'Invalid request. Please check the group code and role label, then try again.',
       'err_server_error':
           'Server error occurred. Please try again in a moment.',
       'err_not_a_member':
@@ -120,10 +123,10 @@ class AppLocalizations {
       'code_hint': 'XXXX-XXXX-XXXX',
       'role_label': 'عنوان شما در گروه',
       'role_hint': 'مثال: مادر، برادر، پدر',
-      'join_button': 'عضویت به عنوان عضو جدید',
-      'login_existing_button': 'ورود با عنوان قبلی من',
+      'join_button': 'عضویت یا ورود به گروه',
+      'login_existing_button': 'بررسی عنوان قبلی من',
       'login_existing_hint':
-          'اگر قبلاً با این عنوان وارد شده‌اید، دکمه «ورود با عنوان قبلی من» را بزنید تا با همان عنوان وارد شوید.',
+          'اگر قبلاً در این گوشی به این گروه متصل بودید، دکمه «بررسی عنوان قبلی من» را بزنید.',
       'resume_saved_group': 'ادامه با عنوان {role}',
       'joining': 'در حال اتصال...',
       'refresh': 'بروزرسانی',
@@ -147,11 +150,14 @@ class AppLocalizations {
           'دسترسی مکان یا GPS خاموش است. ارسال موقعیت تا زمان فعال‌سازی متوقف است.',
       'no_followed_members':
           'از بخش «اعضا» حداقل یک نفر را برای مشاهده انتخاب کنید.',
+      'wait_cooldown': 'لطفاً صبر کنید ({time})',
       // Exact localized error codes from join_group & fetch_locations
       'err_invalid_name':
           'لطفاً یک عنوان معتبر وارد کنید (بین ۱ تا ۳۲ کاراکتر).',
       'err_too_many_attempts':
-          'تعداد تلاش‌های ناموفق بیش از حد مجاز است. لطفاً چند دقیقه صبر کنید و دوباره تلاش کنید.',
+          'تعداد تلاش‌های ناموفق بیش از حد مجاز است. لطفاً ۲ دقیقه صبر کرده و دوباره تلاش کنید.',
+      'err_too_many_attempts_cooldown':
+          'تعداد تلاش‌های ناموفق بیش از حد مجاز است. لطفاً {time} صبر کرده و سپس دوباره تلاش کنید.',
       'err_invalid_code':
           'کد گروه نامعتبر است. لطفاً کد ۱۲ کاراکتری را بررسی کرده و دوباره تلاش کنید.',
       'err_group_expired':
@@ -159,11 +165,11 @@ class AppLocalizations {
       'err_group_full':
           'ظرفیت تعداد اعضای این گروه تکمیل شده است.',
       'err_name_taken':
-          'این عنوان قبلاً ثبت شده است. اگر این عنوان متعلق به خودتان است، دکمه «ورود با عنوان قبلی من» را بزنید.',
+          'این عنوان قبلاً در این گروه انتخاب شده است. لطفاً عنوان دیگری وارد کنید (مثال: پدر ۲).',
       'err_unauthorized':
           'خطا در احراز هویت نشست. لطفاً دوباره تلاش کنید.',
       'err_bad_request':
-          'فرمت درخواست نامعتبر است. کد و عنوان خود را بررسی کنید.',
+          'درخواست نامعتبر است. کد گروه و عنوان خود را بررسی کرده و مجدداً تلاش کنید.',
       'err_server_error':
           'خطای سرور رخ داد. لطفاً لحظاتی دیگر دوباره تلاش کنید.',
       'err_not_a_member':
@@ -179,38 +185,33 @@ class AppLocalizations {
     final lang = _localizedValues.containsKey(locale.languageCode)
         ? locale.languageCode
         : 'en';
-    String value =
-        _localizedValues[lang]?[key] ?? _localizedValues['en']![key] ?? key;
+    String text = _localizedValues[lang]?[key] ??
+        _localizedValues['en']?[key] ??
+        key;
+
     if (params != null) {
-      params.forEach((k, v) {
-        value = value.replaceAll('{$k}', v);
+      params.forEach((paramKey, value) {
+        text = text.replaceAll('{$paramKey}', value);
       });
     }
-    return value;
+    return text;
   }
 
-  String translateErrorCode(String? errorCode) {
-    if (errorCode == null || errorCode.isEmpty) {
-      return tr('err_server_error');
+  String translateErrorCode(String? code, {String? cooldownTime}) {
+    if (code == null) return '';
+    if (code == 'too_many_attempts' && cooldownTime != null) {
+      return tr('err_too_many_attempts_cooldown', params: {'time': cooldownTime});
     }
-    final key = 'err_${errorCode.toLowerCase()}';
-    final lang = _localizedValues.containsKey(locale.languageCode)
-        ? locale.languageCode
-        : 'en';
-    if (_localizedValues[lang]!.containsKey(key) ||
-        _localizedValues['en']!.containsKey(key)) {
-      return tr(key);
-    }
-    return errorCode;
+    final key = 'err_$code';
+    final translated = tr(key);
+    return translated != key ? translated : tr('err_server_error');
   }
 
-  String formatUpdatedAgo(DateTime updatedAt) {
-    final diffMinutes =
-        DateTime.now().difference(updatedAt).inMinutes.clamp(0, 99999);
-    if (diffMinutes < 1) {
-      return tr('updated_just_now');
-    }
-    return tr('updated_min_ago', params: {'min': diffMinutes.toString()});
+  String formatUpdatedAgo(DateTime? time) {
+    if (time == null) return tr('updated_just_now');
+    final diff = DateTime.now().difference(time);
+    if (diff.inMinutes < 1) return tr('updated_just_now');
+    return tr('updated_min_ago', params: {'min': diff.inMinutes.toString()});
   }
 }
 

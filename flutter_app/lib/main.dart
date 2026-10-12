@@ -54,6 +54,7 @@ void main() {
 
     try {
       prefs = await SharedPreferences.getInstance();
+      await prefs.reload(); // Ensure fresh values from disk
     } catch (e) {
       startupError = 'SharedPreferences initialization failed: $e';
     }
@@ -66,25 +67,10 @@ void main() {
           anonKey: AppConfig.supabaseAnonKey.trim(),
         );
         supabaseReady = true;
-
-        // Sign in anonymously in the background without blocking startup if offline
-        final auth = Supabase.instance.client.auth;
-        if (auth.currentSession == null) {
-          unawaited(
-            auth.signInAnonymously().catchError((Object e) {
-              debugPrint('Initial anonymous sign-in deferred: $e');
-              return AuthResponse();
-            }),
-          );
-        }
       } catch (e) {
         startupError = 'Supabase initialization failed: $e';
       }
     }
-
-    // Note: BackgroundLocationService is NOT initialized before runApp().
-    // It is configured lazily inside BackgroundLocationService.startIfPermitted()
-    // ONLY after the user accepts consent and grants runtime location permission.
 
     runApp(
       ProviderScope(
@@ -174,14 +160,30 @@ class _ConfiguredHomeRouter extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(appControllerProvider);
 
-    return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 200),
-      child: !state.consentAccepted
-          ? const ConsentScreen(key: ValueKey('consent'))
-          : state.activeGroup == null
-              ? const LoginScreen(key: ValueKey('login'))
-              : const MapScreen(key: ValueKey('map')),
-    );
+    // If user has not accepted consent, show ConsentScreen
+    if (!state.consentAccepted) {
+      return const ConsentScreen(key: ValueKey('consent'));
+    }
+
+    // If a group session is active (restored synchronously from SharedPreferences),
+    // immediately show MapScreen as the very first screen.
+    if (state.activeGroup != null) {
+      return const MapScreen(key: ValueKey('map'));
+    }
+
+    // If the app is actively bootstrapping/recovering session in background
+    // and there is a saved group that hasn't finished hydrating, show a subtle loader
+    // rather than flashing the login screen.
+    if (state.isBootstrapping && state.lastSavedGroup != null) {
+      return const Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(strokeWidth: 2.5),
+        ),
+      );
+    }
+
+    // Otherwise show LoginScreen
+    return const LoginScreen(key: ValueKey('login'));
   }
 }
 
