@@ -1,0 +1,6 @@
+{
+  "name": "FamilyTrack — Flutter & Supabase Architecture",
+  "description": "Complete Flutter mobile app (iOS & Android), Supabase PostgreSQL schema with RLS, Deno Edge Function, and interactive Waymorphic MapLibre simulator for privacy-first family group location sharing.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

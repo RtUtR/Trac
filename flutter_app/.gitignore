@@ -1,0 +1,10 @@
+# Flutter / Dart build artifacts
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Environment configuration containing project keys (ignored at any folder depth)
+**/config/env.json
+!**/config/env.example.json

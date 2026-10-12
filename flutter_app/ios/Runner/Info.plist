@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>FamilyTrack</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>family_track</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(FLUTTER_BUILD_NAME)</string>
+	<key>CFBundleVersion</key>
+	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>fa</string>
+	</array>
+
+	<!-- Bilingual (English + Persian/Farsi) Location Permission Strings -->
+	<!-- You can also place the respective language strings in ios/Runner/en.lproj/InfoPlist.strings and ios/Runner/fa.lproj/InfoPlist.strings -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>FamilyTrack needs your location to share your latest position with members of your family group. / همراه خانواده برای نمایش آخرین موقعیت شما به اعضای گروهتان به دسترسی مکان نیاز دارد.</string>
+
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>FamilyTrack shares your latest position in the background so your family group can see an up-to-date location even when the app is closed. / همراه خانواده موقعیت شما را در پس‌زمینه بروزرسانی می‌کند تا اعضای گروه حتی هنگام بسته بودن برنامه بتوانند آخرین موقعیت شما را ببینند.</string>
+
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>FamilyTrack shares your latest position in the background so your family group can see an up-to-date location even when the app is closed. / همراه خانواده موقعیت شما را در پس‌زمینه بروزرسانی می‌کند تا اعضای گروه حتی هنگام بسته بودن برنامه بتوانند آخرین موقعیت شما را ببینند.</string>
+
+	<!-- Background Modes for iOS location & periodic background fetch -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>fetch</string>
+		<string>processing</string>
+	</array>
+
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>dev.flutter.background.refresh</string>
+	</array>
+
+	<!-- External map URL schemes for url_launcher -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>comgooglemaps</string>
+		<string>maps</string>
+	</array>
+
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+</dict>
+</plist>
