@@ -1,5 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.example.family_track">
+    xmlns:tools="http://schemas.android.com/tools"
+    package="com.example.family_track"
+    >
 
     <!-- Network & Foreground/Background Location Permissions -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -53,7 +55,9 @@
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService"
             android:foregroundServiceType="location"
-            android:exported="false" />
+            android:exported="false"
+            tools:replace="android:exported" 
+            />
 
         <meta-data
             android:name="flutterEmbedding"
