@@ -26,12 +26,9 @@ jobs:
           cache: true
 
       - name: Create env file from secrets
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           mkdir -p config
-          printf '{"SUPABASE_URL":"%s","SUPABASE_ANON_KEY":"%s"}' "$SUPABASE_URL" "$SUPABASE_ANON_KEY" > config/env.json
+          echo '${{ secrets.ENV_JSON }}' > config/env.json
 
       - name: Regenerate Android scaffold with the current Flutter template (keep our manifest)
         run: |
