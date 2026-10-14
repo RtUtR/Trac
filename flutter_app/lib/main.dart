@@ -12,7 +12,6 @@ import 'providers/app_providers.dart';
 import 'screens/consent_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/map_screen.dart';
-import 'services/background_location_service.dart';
 
 void main() {
   // Catch all synchronous and asynchronous errors so the app never force-closes silently.
@@ -71,13 +70,6 @@ void main() {
       } catch (e) {
         startupError = 'Supabase initialization failed: $e';
       }
-    }
-
-    // Configure BackgroundLocationService early so isolate callback handles are registered
-    try {
-      await BackgroundLocationService.initialize();
-    } catch (e) {
-      debugPrint('BackgroundLocationService early initialize error: $e');
     }
 
     runApp(

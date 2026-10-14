@@ -34,6 +34,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
   bool _isMapLoading = true;
   bool _isStyleLoaded = false;
+  bool _layerAdded = false;
   bool _mapTimedOut = false;
   bool _hasFitInitialBounds = false;
   bool _hasSavedCamera = false;
@@ -153,6 +154,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
   Future<void> _onStyleLoaded() async {
     _isStyleLoaded = true;
+    _layerAdded = false;
     await _syncGeoJsonCircleLayer();
     if (!_hasFitInitialBounds && !_hasSavedCamera) {
       await _fitBoundsToVisibleMembers();
@@ -223,25 +225,25 @@ class _MapScreenState extends ConsumerState<MapScreen>
       };
 
       try {
-        await controller.removeLayer(_circleLayerId);
-      } catch (_) {}
-      try {
-        await controller.removeSource(_geoJsonSourceId);
-      } catch (_) {}
-
-      try {
-        await controller.addGeoJsonSource(_geoJsonSourceId, featureCollection);
-        await controller.addCircleLayer(
-          _geoJsonSourceId,
-          _circleLayerId,
-          const CircleLayerProperties(
-            circleColor: ['get', 'color'],
-            circleRadius: 9.0,
-            circleStrokeWidth: 2.5,
-            circleStrokeColor: '#FFFFFF',
-          ),
-        );
-      } catch (_) {}
+        if (!_layerAdded) {
+          await controller.addGeoJsonSource(_geoJsonSourceId, featureCollection);
+          await controller.addCircleLayer(
+            _geoJsonSourceId,
+            _circleLayerId,
+            const CircleLayerProperties(
+              circleColor: ['get', 'color'],
+              circleRadius: 9.0,
+              circleStrokeWidth: 2.5,
+              circleStrokeColor: '#FFFFFF',
+            ),
+          );
+          _layerAdded = true;
+        } else {
+          await controller.setGeoJsonSource(_geoJsonSourceId, featureCollection);
+        }
+      } catch (e) {
+        debugPrint('Layer sync exception caught: $e');
+      }
     } catch (_) {
     } finally {
       _isSyncingLayers = false;
@@ -489,6 +491,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
             onSelected: (style) async {
               if (style == effectiveStyle) return;
               _startMapLoadingCycle();
+              _layerAdded = false;
               await ref
                   .read(appControllerProvider.notifier)
                   .setMapStyle(style);
