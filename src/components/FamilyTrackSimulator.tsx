@@ -1577,6 +1577,16 @@ export const FamilyTrackSimulator: React.FC<Props> = ({
 
                 {/* BOTTOM PANEL: Member Chips + "Open in maps" Snapshot Actions */}
                 <div className="p-3 border-t border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 space-y-2.5 shrink-0">
+                  {/* Tiny Status Line showing background verification */}
+                  <div className="text-[11px] text-neutral-500 dark:text-neutral-400 flex items-center justify-between pb-1 border-b border-neutral-100 dark:border-neutral-900">
+                    <span className="truncate">
+                      Last sent: {formatMinutesAgo(bgLastSent.sentAt)} • {bgLastLog.includes('Skipped') ? 'skipped, moved 18 m (< 75m)' : 'sent, moved 110 m'}
+                    </span>
+                    <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 font-semibold shrink-0 ms-2">
+                      BG Service Active
+                    </span>
+                  </div>
+
                   {visibleLocations.length === 0 ? (
                     <div className="text-xs text-neutral-500 py-2">
                       {t('no_followed_members')}

@@ -12,8 +12,6 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Optional: allows prompting user to exempt app from aggressive OEM battery optimization (Xiaomi MIUI, Samsung OneUI) -->
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- Android 11+ package visibility for url_launcher external map intents -->
     <queries>
@@ -54,7 +52,7 @@
             android:name="id.flutter.flutter_background_service.BackgroundService"
             android:foregroundServiceType="location"
             android:exported="false"
-            tools:replace="android:exported" 
+            tools:replace="android:exported,android:foregroundServiceType"
             />
 
         <meta-data

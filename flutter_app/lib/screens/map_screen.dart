@@ -4,6 +4,7 @@ import 'dart:io' show Platform;
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../config/app_config.dart';
@@ -18,27 +19,97 @@ class MapScreen extends ConsumerStatefulWidget {
   ConsumerState<MapScreen> createState() => _MapScreenState();
 }
 
-class _MapScreenState extends ConsumerState<MapScreen> {
+class _MapScreenState extends ConsumerState<MapScreen>
+    with AutomaticKeepAliveClientMixin<MapScreen> {
   static const String _geoJsonSourceId = 'familytrack-members-source';
   static const String _circleLayerId = 'familytrack-members-circle-layer';
 
+  @override
+  bool get wantKeepAlive => true;
+
   MapLibreMapController? _mapController;
   Timer? _mapLoadTimeoutTimer;
+  Timer? _cameraDebounceTimer;
+  Timer? _statusTickerTimer;
 
   bool _isMapLoading = true;
   bool _isStyleLoaded = false;
   bool _mapTimedOut = false;
   bool _hasFitInitialBounds = false;
+  bool _hasSavedCamera = false;
+
+  late CameraPosition _initialCameraPosition;
 
   @override
   void initState() {
     super.initState();
     _startMapLoadingCycle();
+
+    // 1. Initial camera priority:
+    // (a) last saved camera from shared_preferences
+    // (b) last known device position at zoom ~14
+    // (c) only if neither exists, world view at zoom 2 (no city) until location arrives
+    final prefs = ref.read(sharedPreferencesProvider);
+    final savedLat = prefs.getDouble('ft_camera_lat');
+    final savedLng = prefs.getDouble('ft_camera_lng');
+    final savedZoom = prefs.getDouble('ft_camera_zoom');
+
+    if (savedLat != null && savedLng != null && savedZoom != null) {
+      _hasSavedCamera = true;
+      _initialCameraPosition = CameraPosition(
+        target: LatLng(savedLat, savedLng),
+        zoom: savedZoom,
+      );
+    } else {
+      // World view at zoom 2 (no city)
+      _initialCameraPosition = const CameraPosition(
+        target: LatLng(0.0, 0.0),
+        zoom: 2.0,
+      );
+      _resolveDevicePositionOnStart();
+    }
+
+    // Refresh status line relative time ("X min ago") every 30 seconds
+    _statusTickerTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  Future<void> _resolveDevicePositionOnStart() async {
+    try {
+      final lastKnown = await Geolocator.getLastKnownPosition();
+      if (lastKnown != null && mounted && !_hasSavedCamera) {
+        _mapController?.animateCamera(
+          CameraUpdate.newLatLngZoom(
+            LatLng(lastKnown.latitude, lastKnown.longitude),
+            14.0,
+          ),
+        );
+        return;
+      }
+
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.medium,
+          timeLimit: Duration(seconds: 6),
+        ),
+      );
+      if (mounted && !_hasSavedCamera) {
+        _mapController?.animateCamera(
+          CameraUpdate.newLatLngZoom(
+            LatLng(pos.latitude, pos.longitude),
+            14.0,
+          ),
+        );
+      }
+    } catch (_) {}
   }
 
   @override
   void dispose() {
     _mapLoadTimeoutTimer?.cancel();
+    _cameraDebounceTimer?.cancel();
+    _statusTickerTimer?.cancel();
     super.dispose();
   }
 
@@ -64,12 +135,24 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   Future<void> _onStyleLoaded() async {
     _isStyleLoaded = true;
     await _syncGeoJsonCircleLayer();
-    if (!_hasFitInitialBounds) {
+    if (!_hasFitInitialBounds && !_hasSavedCamera) {
       await _fitBoundsToVisibleMembers();
     }
   }
 
   void _onMapIdle() {
+    // 2. Save camera (lat, lng, zoom) to shared_preferences when idle (debounced)
+    _cameraDebounceTimer?.cancel();
+    _cameraDebounceTimer = Timer(const Duration(milliseconds: 600), () async {
+      final cam = _mapController?.cameraPosition;
+      if (cam != null) {
+        final prefs = ref.read(sharedPreferencesProvider);
+        await prefs.setDouble('ft_camera_lat', cam.target.latitude);
+        await prefs.setDouble('ft_camera_lng', cam.target.longitude);
+        await prefs.setDouble('ft_camera_zoom', cam.zoom);
+      }
+    });
+
     if (_isStyleLoaded && _isMapLoading && mounted) {
       _mapLoadTimeoutTimer?.cancel();
       setState(() {
@@ -312,6 +395,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     final l10n = AppLocalizations.of(context);
     final state = ref.watch(appControllerProvider);
     final theme = Theme.of(context);
@@ -442,10 +526,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               children: [
                 MapLibreMap(
                   styleString: AppConfig.styleUrl(effectiveStyle),
-                  initialCameraPosition: const CameraPosition(
-                    target: LatLng(35.6892, 51.3890),
-                    zoom: 11.5,
-                  ),
+                  initialCameraPosition: _initialCameraPosition,
                   minMaxZoomPreference: const MinMaxZoomPreference(
                     AppConfig.minMapZoom,
                     AppConfig.maxMapOverZoom,
@@ -508,6 +589,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               ],
             ),
           ),
+
+          _buildStatusLine(theme),
 
           Container(
             width: double.infinity,
@@ -615,6 +698,46 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                   ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildStatusLine(ThemeData theme) {
+    final prefs = ref.watch(sharedPreferencesProvider);
+    final lastSentAtMs = prefs.getInt('bg_last_sent_at_ms');
+    final lastCheckStatus = prefs.getString('bg_last_check_status');
+
+    String text;
+    if (lastSentAtMs == null) {
+      text = lastCheckStatus ??
+          'Background service active • Checking location every 3 min';
+    } else {
+      final elapsedSec =
+          (DateTime.now().millisecondsSinceEpoch - lastSentAtMs) ~/ 1000;
+      final elapsedMin = elapsedSec ~/ 60;
+      final ago = elapsedMin <= 0 ? 'just now' : '$elapsedMin min ago';
+      text =
+          'Last sent: $ago${lastCheckStatus != null ? ' • $lastCheckStatus' : ''}';
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        border: Border(
+          top: BorderSide(
+            color: theme.colorScheme.onSurface.withOpacity(0.08),
+          ),
+        ),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 11,
+          color: theme.colorScheme.onSurface.withOpacity(0.55),
+        ),
+        overflow: TextOverflow.ellipsis,
       ),
     );
   }

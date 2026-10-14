@@ -66,7 +66,7 @@ export const DELIVERABLE_FILES: DeliverableFile[] = [
     category: 'dart',
     language: 'dart',
     summary:
-      'Wraps startup in runZonedGuarded + PlatformDispatcher.onError + ErrorWidget.builder, awaits SharedPreferences and Supabase.initialize in try/catch, and defers BackgroundLocationService initialization until after runApp() and permission grant.',
+      'Listens to AppLifecycleListener onResume to trigger immediate location sending upon return to foreground. Router guarantees the main page (MapScreen) is always the first screen for logged-in users, eliminating login page redirects.',
     content: mainDartRaw,
   },
   {
@@ -76,7 +76,7 @@ export const DELIVERABLE_FILES: DeliverableFile[] = [
     category: 'dart',
     language: 'dart',
     summary:
-      'Prevents Android 12–15 startup crashes: uses autoStart: false and autoStartOnBoot: false, omits custom notificationChannelId so default channel is created automatically, and configures/starts only in startIfPermitted().',
+      'Foreground service with persistent notification, 3-minute periodic timer, continuous position stream, 75m movement threshold, 20-minute stationary heartbeat, direct PostgREST HTTP fallback, and automated Supabase JWT token refresh.',
     content: backgroundLocationRaw,
   },
   {
@@ -86,7 +86,7 @@ export const DELIVERABLE_FILES: DeliverableFile[] = [
     category: 'dart',
     language: 'dart',
     summary:
-      'Reads SUPABASE_URL and SUPABASE_ANON_KEY via String.fromEnvironment, validates HTTPS URL and rejects placeholder strings in isSupabaseConfigured so invalid env.json never crashes Supabase.initialize.',
+      'Reads SUPABASE_URL and SUPABASE_ANON_KEY via String.fromEnvironment, validates HTTPS URL, and configures background location intervals (3-min timer, 75m min move, 20-min heartbeat).',
     content: appConfigRaw,
   },
   {
@@ -96,7 +96,7 @@ export const DELIVERABLE_FILES: DeliverableFile[] = [
     category: 'dart',
     language: 'dart',
     summary:
-      'Riverpod state controller managing active group sessions, persistent 2-minute (120s) login cooldown ticker upon too_many_attempts, and calling BackgroundLocationService.startIfPermitted() only after runtime location permissions are verified.',
+      'Riverpod state controller: keeps Refresh strictly separate from sending (Refresh only calls fetch_locations), restores active group synchronously on launch, handles onAppResumed foreground location sends, and maintains 2-min rate limit ticker.',
     content: appProvidersRaw,
   },
   {

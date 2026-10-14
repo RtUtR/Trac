@@ -1,6 +1,7 @@
 // lib/services/background_location_service.dart
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
@@ -11,21 +12,25 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/app_config.dart';
 import '../models/models.dart';
 
-/// Background location sender:
-/// - Runs as an Android Foreground Service with persistent notification.
-/// - Sends ONLY this phone's own location via:
-///   supabase.from('locations').upsert({'user_id': myUserId, 'lat': ..., 'lng': ..., 'accuracy': ...})
-/// - Never sends `updated_at` (the server sets it).
-/// - Never selects from `public.locations` or fetches other members in the background.
-/// - Reads ft_my_user_id, ft_access_token, ft_refresh_token from SharedPreferences so requests
-///   include the user's valid Bearer JWT header, satisfying Supabase RLS policies (auth.uid() = user_id).
-/// - While moving (>75 m displacement): sends every ~2 minutes.
-/// - While stationary: sends heartbeat every ~20 minutes.
+/// Background location service for FamilyTrack:
+/// - Android: Runs as a Foreground Service of type "location" with a persistent notification
+///   (requires FOREGROUND_SERVICE_LOCATION, POST_NOTIFICATIONS, and ACCESS_FINE_LOCATION permissions).
+///   Periodically checks location every 3 minutes (LOCATION_CHECK_INTERVAL) and listens to position updates.
+///   - If device moved > 75 m (MIN_MOVE_METERS) since last send: upserts position in public.locations.
+///   - If stationary: sends a heartbeat upsert if > 20 minutes (HEARTBEAT_INTERVAL) elapsed.
+///   - Otherwise skips sending.
+/// - iOS: Uses background location updates with the same rules (75 m movement, 20 minute heartbeat).
+///   Note: On iOS, exact timing is controlled by system power management and is not guaranteed.
+/// - Never sends `updated_at` (server sets it automatically).
+/// - Never selects from `locations` or calls `fetch_locations` (Refresh button only).
+/// - Restores session JWT before upserting so Supabase RLS (auth.uid() = user_id) succeeds in background.
 class BackgroundLocationService {
   static const String _prefLastSentLat = 'bg_last_sent_lat';
   static const String _prefLastSentLng = 'bg_last_sent_lng';
   static const String _prefLastSentAtMs = 'bg_last_sent_at_ms';
   static const String _prefPendingPayload = 'bg_pending_location_payload';
+  static const String _prefLastCheckStatus = 'bg_last_check_status';
+  static const String _prefRefreshLockMs = 'ft_refresh_lock_ms';
   static const String _prefMyUserId = 'ft_my_user_id';
   static const String _prefAccessToken = 'ft_access_token';
   static const String _prefRefreshToken = 'ft_refresh_token';
@@ -45,6 +50,7 @@ class BackgroundLocationService {
           autoStart: false,
           autoStartOnBoot: false,
           isForegroundMode: true,
+          notificationChannelId: 'familytrack_location_channel',
           initialNotificationTitle: 'FamilyTrack Location Active',
           initialNotificationContent:
               'Sharing your latest location with your group in the background.',
@@ -64,7 +70,7 @@ class BackgroundLocationService {
   }
 
   /// Configures and starts the foreground/background service ONLY after verifying that
-  /// location services are enabled and runtime location permission is granted (required on Android 14/15).
+  /// location services are enabled and runtime location permission is granted.
   static Future<void> startIfPermitted() async {
     if (!AppConfig.isSupabaseConfigured) return;
 
@@ -106,6 +112,8 @@ class BackgroundLocationService {
 
   @pragma('vm:entry-point')
   static Future<bool> onIosBackground(ServiceInstance service) async {
+    // Note for iOS: Background execution intervals are managed by iOS power policy
+    // and exact timing is not guaranteed by the OS.
     try {
       WidgetsFlutterBinding.ensureInitialized();
       DartPluginRegistrant.ensureInitialized();
@@ -169,10 +177,10 @@ class BackgroundLocationService {
       debugPrint('getPositionStream subscription failed: $e');
     }
 
-    // 3. Fallback periodic timer every 2 minutes:
-    // Ensures stationary heartbeat (every 20 min) is sent even if device has not moved
+    // 3. Periodic timer every 3 minutes (AppConfig.locationCheckIntervalSeconds):
+    // Verifies movement and sends stationary heartbeat (every 20 min)
     Timer.periodic(
-      const Duration(seconds: AppConfig.movingIntervalSeconds),
+      const Duration(seconds: AppConfig.locationCheckIntervalSeconds),
       (_) async {
         await _performLocationCheckAndSend(service);
       },
@@ -228,6 +236,7 @@ class BackgroundLocationService {
       bool shouldSend = false;
 
       if (lastLat == null || lastLng == null || lastSentAtMs == null) {
+        // First send after joining or restarting service
         shouldSend = true;
       } else {
         final distanceMeters = Geolocator.distanceBetween(
@@ -238,13 +247,18 @@ class BackgroundLocationService {
         );
         final elapsedSeconds = (nowMs - lastSentAtMs) ~/ 1000;
 
-        // Moving: > 75m displacement & ~2 min elapsed
-        if (distanceMeters >= AppConfig.minDisplacementMeters &&
-            elapsedSeconds >= AppConfig.movingIntervalSeconds) {
+        // If moved > 75 meters (MIN_MOVE_METERS)
+        if (distanceMeters >= AppConfig.minMoveMeters) {
           shouldSend = true;
-        } else if (elapsedSeconds >= AppConfig.stationaryHeartbeatSeconds) {
-          // Stationary heartbeat: ~20 min
+        } else if (elapsedSeconds >= AppConfig.heartbeatIntervalSeconds) {
+          // Stationary heartbeat: > 20 minutes passed since last send
           shouldSend = true;
+        } else {
+          // Record skip status so user can verify check results on screen
+          await prefs.setString(
+            _prefLastCheckStatus,
+            'skipped, moved ${distanceMeters.round()} m',
+          );
         }
       }
 
@@ -256,28 +270,52 @@ class BackgroundLocationService {
         accuracy: position.accuracy,
       );
 
+      String sendReason = 'sent (initial)';
+      if (lastLat != null && lastLng != null) {
+        final dist = Geolocator.distanceBetween(
+          lastLat,
+          lastLng,
+          position.latitude,
+          position.longitude,
+        );
+        if (dist >= AppConfig.minMoveMeters) {
+          sendReason = 'sent, moved ${dist.round()} m';
+        } else {
+          sendReason = 'sent (heartbeat)';
+        }
+      }
+
       final sent = await _tryUpsertPayload(payload, prefs);
       if (sent) {
         await prefs.setDouble(_prefLastSentLat, payload.lat);
         await prefs.setDouble(_prefLastSentLng, payload.lng);
         await prefs.setInt(_prefLastSentAtMs, nowMs);
+        await prefs.setString(_prefLastCheckStatus, sendReason);
         await prefs.remove(_prefPendingPayload);
 
         if (service is AndroidServiceInstance) {
+          final now = DateTime.now().toLocal();
           final timeStr =
-              DateTime.now().toLocal().toString().substring(11, 16);
+              '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
           service.setForegroundNotificationInfo(
             title: 'FamilyTrack Location Active',
-            content: 'Last updated at $timeStr • Sharing with group',
+            content: 'Last updated at $timeStr • $sendReason',
           );
         }
       } else {
+        await prefs.setString(
+          _prefLastCheckStatus,
+          'offline, queued (${payload.accuracy.toStringAsFixed(0)}m accuracy)',
+        );
+        // Cache in offline queue if temporarily unreachable
         await prefs.setString(
           _prefPendingPayload,
           jsonEncode(payload.toJson()),
         );
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Background _handleNewPosition error: $e');
+    }
   }
 
   static Future<void> _flushOfflineQueueIfPresent(
@@ -319,29 +357,17 @@ class BackgroundLocationService {
         return false;
       }
 
-      // Instantiate a SupabaseClient with the user's Bearer JWT in the Authorization header
-      // so Supabase Postgres RLS (auth.uid() = user_id) allows the upsert.
-      final client = SupabaseClient(
-        AppConfig.supabaseUrl.trim(),
-        AppConfig.supabaseAnonKey.trim(),
-        headers: {
-          if (accessToken != null && accessToken.isNotEmpty)
-            'Authorization': 'Bearer $accessToken',
-        },
-      );
-
+      // Method 1: Use SupabaseClient with Bearer JWT
       try {
-        // Never send updated_at (the server sets it)
-        await client.from('locations').upsert({
-          'user_id': myUserId,
-          'lat': payload.lat,
-          'lng': payload.lng,
-          'accuracy': payload.accuracy,
-        });
-        return true;
-      } catch (upsertError) {
-        debugPrint('Background primary upsert error: $upsertError');
-        // If JWT expired (401), attempt session refresh with saved refresh token
+        final client = SupabaseClient(
+          AppConfig.supabaseUrl.trim(),
+          AppConfig.supabaseAnonKey.trim(),
+          headers: {
+            if (accessToken != null && accessToken.isNotEmpty)
+              'Authorization': 'Bearer $accessToken',
+          },
+        );
+
         if (refreshToken != null && refreshToken.isNotEmpty) {
           try {
             final authRes = await client.auth.setSession(refreshToken);
@@ -349,32 +375,143 @@ class BackgroundLocationService {
             if (newSession != null) {
               await prefs.setString(_prefAccessToken, newSession.accessToken);
               if (newSession.refreshToken != null) {
-                await prefs.setString(_prefRefreshToken, newSession.refreshToken!);
+                await prefs.setString(
+                  _prefRefreshToken,
+                  newSession.refreshToken!,
+                );
               }
-              final freshClient = SupabaseClient(
-                AppConfig.supabaseUrl.trim(),
-                AppConfig.supabaseAnonKey.trim(),
-                headers: {
-                  'Authorization': 'Bearer ${newSession.accessToken}',
-                },
-              );
-              await freshClient.from('locations').upsert({
-                'user_id': myUserId,
-                'lat': payload.lat,
-                'lng': payload.lng,
-                'accuracy': payload.accuracy,
-              });
-              return true;
             }
-          } catch (refreshError) {
-            debugPrint('Background token refresh failed: $refreshError');
-          }
+          } catch (_) {}
         }
-        return false;
+
+        await client.from('locations').upsert({
+          'user_id': myUserId,
+          'lat': payload.lat,
+          'lng': payload.lng,
+          'accuracy': payload.accuracy,
+        }, onConflict: 'user_id');
+        return true;
+      } catch (clientErr) {
+        debugPrint('SupabaseClient upsert attempt failed: $clientErr');
       }
+
+      // Method 2: Resilient direct HTTP POST to PostgREST with token refresh
+      return await _sendLocationHttpDirect(
+        myUserId: myUserId,
+        lat: payload.lat,
+        lng: payload.lng,
+        accuracy: payload.accuracy,
+        accessToken: accessToken,
+        refreshToken: refreshToken,
+        prefs: prefs,
+      );
     } catch (e) {
       debugPrint('Background _tryUpsertPayload uncaught error: $e');
       return false;
     }
+  }
+
+  /// Sends the location row directly to Supabase REST PostgREST endpoint
+  /// (`/rest/v1/locations?on_conflict=user_id`) with exact Bearer authorization header
+  /// and "Prefer: resolution=merge-duplicates,return=minimal".
+  static Future<bool> _sendLocationHttpDirect({
+    required String myUserId,
+    required double lat,
+    required double lng,
+    required double accuracy,
+    required String? accessToken,
+    required String? refreshToken,
+    required SharedPreferences prefs,
+  }) async {
+    final baseUrl = AppConfig.supabaseUrl.trim();
+    final anonKey = AppConfig.supabaseAnonKey.trim();
+    if (baseUrl.isEmpty || anonKey.isEmpty) return false;
+
+    Future<int> doUpsert(String token) async {
+      final client = HttpClient();
+      client.connectionTimeout = const Duration(seconds: 15);
+      try {
+        final uri = Uri.parse('$baseUrl/rest/v1/locations?on_conflict=user_id');
+        final req = await client.postUrl(uri);
+        req.headers.set('apikey', anonKey);
+        req.headers.set('Authorization', 'Bearer $token');
+        req.headers.set('Content-Type', 'application/json');
+        req.headers.set('Prefer', 'resolution=merge-duplicates,return=minimal');
+        req.write(jsonEncode({
+          'user_id': myUserId,
+          'lat': lat,
+          'lng': lng,
+          'accuracy': accuracy,
+        }));
+        final resp = await req.close();
+        return resp.statusCode;
+      } catch (_) {
+        return 0;
+      } finally {
+        client.close();
+      }
+    }
+
+    int status = 0;
+    if (accessToken != null && accessToken.isNotEmpty) {
+      status = await doUpsert(accessToken);
+      if (status >= 200 && status < 300) return true;
+    }
+
+    // If token expired (401/403) or not yet sent, refresh via Supabase Auth REST
+    if (refreshToken != null && refreshToken.isNotEmpty) {
+      try {
+        final nowMs = DateTime.now().millisecondsSinceEpoch;
+        final lockMs = prefs.getInt(_prefRefreshLockMs) ?? 0;
+        if (nowMs - lockMs < 12000) {
+          // Another isolate is currently refreshing; pause and reload
+          await Future.delayed(const Duration(milliseconds: 1200));
+          await prefs.reload();
+          final freshAccess = prefs.getString(_prefAccessToken);
+          if (freshAccess != null && freshAccess.isNotEmpty) {
+            final ok = await doUpsert(freshAccess);
+            if (ok >= 200 && ok < 300) return true;
+          }
+        }
+
+        await prefs.setInt(_prefRefreshLockMs, nowMs);
+
+        final client = HttpClient();
+        client.connectionTimeout = const Duration(seconds: 15);
+        final refreshUri =
+            Uri.parse('$baseUrl/auth/v1/token?grant_type=refresh_token');
+        final req = await client.postUrl(refreshUri);
+        req.headers.set('apikey', anonKey);
+        req.headers.set('Content-Type', 'application/json');
+        req.write(jsonEncode({'refresh_token': refreshToken}));
+        final resp = await req.close();
+        final bodyStr = await resp.transform(utf8.decoder).join();
+        client.close();
+
+        if (resp.statusCode >= 200 && resp.statusCode < 300) {
+          final data = jsonDecode(bodyStr) as Map<String, dynamic>;
+          final newAccess = data['access_token'] as String?;
+          final newRefresh = data['refresh_token'] as String?;
+          if (newAccess != null && newAccess.isNotEmpty) {
+            await prefs.setString(_prefAccessToken, newAccess);
+            if (newRefresh != null && newRefresh.isNotEmpty) {
+              await prefs.setString(_prefRefreshToken, newRefresh);
+            }
+            final retryStatus = await doUpsert(newAccess);
+            return retryStatus >= 200 && retryStatus < 300;
+          }
+        } else if (resp.statusCode == 400 || resp.statusCode == 401) {
+          // Refresh token permanently invalid / revoked
+          await prefs.setString(
+            _prefLastCheckStatus,
+            'Session expired. Please re-open the app to sign in.',
+          );
+        }
+      } catch (e) {
+        debugPrint('Direct REST token refresh error: $e');
+      }
+    }
+
+    return false;
   }
 }

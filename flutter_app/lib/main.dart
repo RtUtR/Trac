@@ -89,7 +89,7 @@ void main() {
   });
 }
 
-class FamilyTrackApp extends ConsumerWidget {
+class FamilyTrackApp extends ConsumerStatefulWidget {
   final bool isConfigured;
   final String? startupError;
 
@@ -100,7 +100,32 @@ class FamilyTrackApp extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<FamilyTrackApp> createState() => _FamilyTrackAppState();
+}
+
+class _FamilyTrackAppState extends ConsumerState<FamilyTrackApp> {
+  late final AppLifecycleListener _lifecycleListener;
+
+  @override
+  void initState() {
+    super.initState();
+    _lifecycleListener = AppLifecycleListener(
+      onResume: () {
+        if (widget.isConfigured) {
+          ref.read(appControllerProvider.notifier).onAppResumed();
+        }
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _lifecycleListener.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'FamilyTrack',
@@ -117,8 +142,8 @@ class FamilyTrackApp extends ConsumerWidget {
       themeMode: ThemeMode.system,
       theme: _buildMonochromeTheme(Brightness.light),
       darkTheme: _buildMonochromeTheme(Brightness.dark),
-      home: !isConfigured
-          ? MissingConfigScreen(errorDetail: startupError)
+      home: !widget.isConfigured
+          ? MissingConfigScreen(errorDetail: widget.startupError)
           : const _ConfiguredHomeRouter(),
     );
   }
@@ -160,21 +185,20 @@ class _ConfiguredHomeRouter extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(appControllerProvider);
 
-    // If user has not accepted consent, show ConsentScreen
+    // 1. Consent screen on first launch before acceptance
     if (!state.consentAccepted) {
       return const ConsentScreen(key: ValueKey('consent'));
     }
 
-    // If a group session is active (restored synchronously from SharedPreferences),
-    // immediately show MapScreen as the very first screen.
-    if (state.activeGroup != null) {
+    // 2. Once a user has logged in / joined a group, their main page (MapScreen)
+    // is ALWAYS their first page. They are NEVER redirected to LoginScreen upon app launch
+    // or when returning to the app from background.
+    if (state.activeGroup != null || state.lastSavedGroup != null) {
       return const MapScreen(key: ValueKey('map'));
     }
 
-    // If the app is actively bootstrapping/recovering session in background
-    // and there is a saved group that hasn't finished hydrating, show a subtle loader
-    // rather than flashing the login screen.
-    if (state.isBootstrapping && state.lastSavedGroup != null) {
+    // 3. During initial bootstrap before preferences are loaded
+    if (state.isBootstrapping) {
       return const Scaffold(
         body: Center(
           child: CircularProgressIndicator(strokeWidth: 2.5),
@@ -182,7 +206,7 @@ class _ConfiguredHomeRouter extends ConsumerWidget {
       );
     }
 
-    // Otherwise show LoginScreen
+    // 4. Show LoginScreen only when no group has been joined yet
     return const LoginScreen(key: ValueKey('login'));
   }
 }

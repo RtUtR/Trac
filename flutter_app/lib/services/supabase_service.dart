@@ -83,9 +83,8 @@ class SupabaseService {
       }
     }
 
-    // Only sign in anonymously if there is no user session saved yet
-    final existingUserId = _prefs.getString(_prefMyUserId);
-    if (existingUserId == null || existingUserId.isEmpty) {
+    // If we still do not have an active session, sign in anonymously to obtain a valid JWT
+    if (_client.auth.currentSession == null) {
       try {
         final response = await _client.auth.signInAnonymously();
         final session = response.session;
@@ -105,6 +104,27 @@ class SupabaseService {
     }
 
     throw Exception('unauthorized');
+  }
+
+  /// Reloads the persisted session from SharedPreferences and re-applies it to the
+  /// Supabase client (e.g. after the background isolate has rotated the refresh token).
+  Future<void> reloadPersistedSession() async {
+    try {
+      await _prefs.reload();
+      final savedRefreshToken = _prefs.getString(_prefRefreshToken);
+      if (savedRefreshToken != null && savedRefreshToken.isNotEmpty) {
+        final currentToken = _client.auth.currentSession?.refreshToken;
+        if (currentToken != savedRefreshToken ||
+            (_client.auth.currentSession?.isExpired ?? true)) {
+          final res = await _client.auth.setSession(savedRefreshToken);
+          if (res.session != null) {
+            await _persistSessionTokens(res.session!);
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('reloadPersistedSession error: $e');
+    }
   }
 
   /// 1. Join: calls Edge Function "join_group" with body {code, display_name}.
@@ -370,7 +390,7 @@ class SupabaseService {
       'lat': lat,
       'lng': lng,
       'accuracy': accuracy,
-    });
+    }, onConflict: 'user_id');
   }
 
   /// 4. Fetch others:

@@ -110,8 +110,15 @@ class AppConfig {
   // Map ready timeout before degrading gracefully to chips + "Open in maps"
   static const Duration mapReadyTimeout = Duration(seconds: 20);
 
-  // Background location sending parameters (battery & data friendly)
-  static const int movingIntervalSeconds = 120;
-  static const double minDisplacementMeters = 75.0;
-  static const int stationaryHeartbeatSeconds = 1200;
+  // Background location sending parameters:
+  // Timer runs every 3 minutes; sends if moved > 75m or if 20 min heartbeat elapsed
+  static const int locationCheckIntervalSeconds = 180; // 3 minutes
+  static const double minMoveMeters = 75.0; // 75 meters
+  static const int heartbeatIntervalSeconds = 1200; // 20 minutes
+
+  // Backward-compatibility aliases
+  static const int movingIntervalSeconds = locationCheckIntervalSeconds;
+  static const double minDisplacementMeters = minMoveMeters;
+  static const int stationaryHeartbeatSeconds = heartbeatIntervalSeconds;
 }
+

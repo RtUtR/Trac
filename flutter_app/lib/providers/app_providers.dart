@@ -117,18 +117,54 @@ class AppController extends StateNotifier<AppState> {
 
   AppController(this._prefs, this._supabase)
       : super(
-          AppState(
-            consentAccepted: _prefs.getBool(_prefConsent) ?? false,
-            locationPermissionGranted: false,
-            // Synchronously restore activeGroup from SharedPreferences on frame 1
-            // so the app opens directly to MapScreen without ever flashing the login screen.
-            activeGroup: _readSavedGroupSummaryStatic(_prefs),
-            lastSavedGroup: _readSavedGroupSummaryStatic(_prefs),
-            userSelectedMapStyle: _parseStyle(_prefs.getString(_prefMapStyle)),
-            isBootstrapping: true,
-          ),
+          _buildInitialState(_prefs),
         ) {
     _bootstrap();
+  }
+
+  static AppState _buildInitialState(SharedPreferences prefs) {
+    final summary = _readSavedGroupSummaryStatic(prefs);
+    final cached = _readCachedLocationsStatic(prefs, summary?.id);
+    final followed = _readFollowedUserIdsStatic(prefs, summary?.id, cached);
+
+    return AppState(
+      consentAccepted: prefs.getBool(_prefConsent) ?? false,
+      locationPermissionGranted: false,
+      activeGroup: summary,
+      lastSavedGroup: summary,
+      cachedLocations: cached,
+      followedUserIds: followed,
+      userSelectedMapStyle: _parseStyle(prefs.getString(_prefMapStyle)),
+      isBootstrapping: true,
+    );
+  }
+
+  static List<MemberLocation> _readCachedLocationsStatic(
+    SharedPreferences prefs,
+    String? groupId,
+  ) {
+    if (groupId == null || groupId.isEmpty) return const [];
+    final raw = prefs.getString('ft_cached_locs_$groupId');
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      final decoded = jsonDecode(raw) as List<dynamic>;
+      return decoded
+          .map((e) => MemberLocation.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  static Set<String> _readFollowedUserIdsStatic(
+    SharedPreferences prefs,
+    String? groupId,
+    List<MemberLocation> cached,
+  ) {
+    if (groupId == null || groupId.isEmpty) return const {};
+    final list = prefs.getStringList('ft_followed_$groupId');
+    if (list != null && list.isNotEmpty) return list.toSet();
+    return cached.map((e) => e.userId).toSet();
   }
 
   static MapStyleOption? _parseStyle(String? raw) {
@@ -142,13 +178,13 @@ class AppController extends StateNotifier<AppState> {
   static GroupSummary? _readSavedGroupSummaryStatic(SharedPreferences prefs) {
     final savedGroupId = prefs.getString(_prefGroupId);
     final savedDisplayName = prefs.getString(_prefMyDisplayName);
-    final savedColor = prefs.getString(_prefMyColor);
     if (savedGroupId == null ||
-        savedGroupId.isEmpty ||
+        savedGroupId.trim().isEmpty ||
         savedDisplayName == null ||
-        savedColor == null) {
+        savedDisplayName.trim().isEmpty) {
       return null;
     }
+    final savedColor = prefs.getString(_prefMyColor) ?? '#2563EB';
     final savedExpiresRaw = prefs.getString(_prefGroupExpiresAt);
     final expiresAt = (savedExpiresRaw != null
             ? DateTime.tryParse(savedExpiresRaw)
@@ -157,10 +193,10 @@ class AppController extends StateNotifier<AppState> {
     final maxDevices = prefs.getInt(_prefGroupMaxDevices) ?? 4;
 
     return GroupSummary(
-      id: savedGroupId,
+      id: savedGroupId.trim(),
       maxDevices: maxDevices,
       expiresAt: expiresAt,
-      myDisplayName: savedDisplayName,
+      myDisplayName: savedDisplayName.trim(),
       myColor: savedColor,
     );
   }
@@ -266,10 +302,7 @@ class AppController extends StateNotifier<AppState> {
 
     await refreshPermissionStatus();
     state = state.copyWith(consentAccepted: true);
-
-    if (state.locationPermissionGranted) {
-      await BackgroundLocationService.startIfPermitted();
-    }
+    // Background service will start after successful join_group, not prematurely.
   }
 
   /// 1. Join or Log In to group.
@@ -326,6 +359,51 @@ class AppController extends StateNotifier<AppState> {
       await BackgroundLocationService.startIfPermitted();
     }
   }
+
+  /// Called whenever the app returns to the foreground.
+  /// Sends one location immediately (independent of distance and timer) as required,
+  /// reloads session tokens from storage into SupabaseClient, re-verifies permissions,
+  /// keeps background service alive, and updates member list.
+  Future<void> onAppResumed() async {
+    try {
+      await _prefs.reload();
+      // Reload persisted session so if background isolate rotated refresh token, Supabase client has it
+      await _supabase.reloadPersistedSession();
+      await refreshPermissionStatus();
+
+      final group = state.activeGroup ?? _readSavedGroupSummary();
+      if (group != null) {
+        if (state.activeGroup == null) {
+          state = state.copyWith(activeGroup: group, lastSavedGroup: group);
+        }
+
+        // Send one location immediately when returning to foreground (independent of distance & timer)
+        unawaited(_sendImmediateOwnPosition());
+
+        if (state.locationPermissionGranted) {
+          unawaited(BackgroundLocationService.startIfPermitted());
+        }
+
+        unawaited(refreshGroupMembers());
+
+        // Silently verify if group has expired without kicking out offline users
+        try {
+          final groupInfo = await _supabase.fetchGroupInfo(group.id);
+          if (groupInfo != null && groupInfo.isExpired) {
+            await _clearLocalGroupData(group.id);
+            state = state.copyWith(
+              clearActiveGroup: true,
+              clearLastSavedGroup: true,
+              cachedLocations: [],
+              groupMembers: [],
+              errorCode: 'group_expired',
+            );
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+
 
   void _startLoginCooldownTicker(int seconds) {
     _loginCooldownTimer?.cancel();
@@ -475,8 +553,6 @@ class AppController extends StateNotifier<AppState> {
     if (targets.isEmpty) return;
 
     state = state.copyWith(isLoading: true, clearErrorCode: true);
-
-    await _sendImmediateOwnPosition();
 
     final result = await _supabase.fetchLocations(
       groupId: group.id,
