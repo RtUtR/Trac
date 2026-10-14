@@ -37,6 +37,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
   bool _mapTimedOut = false;
   bool _hasFitInitialBounds = false;
   bool _hasSavedCamera = false;
+  bool _isSyncingLayers = false;
+  bool _pendingLayerSync = false;
 
   CameraPosition _initialCameraPosition = const CameraPosition(
     target: LatLng(0.0, 0.0),
@@ -188,51 +190,66 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final controller = _mapController;
     if (controller == null || !_isStyleLoaded) return;
 
-    final state = ref.read(appControllerProvider);
-    final visible = state.cachedLocations
-        .where((loc) => state.followedUserIds.contains(loc.userId))
-        .toList();
+    if (_isSyncingLayers) {
+      _pendingLayerSync = true;
+      return;
+    }
+    _isSyncingLayers = true;
 
-    final features = visible.map((loc) {
-      return {
-        'type': 'Feature',
-        'id': loc.userId,
-        'properties': {
-          'user_id': loc.userId,
-          'color': loc.color,
-        },
-        'geometry': {
-          'type': 'Point',
-          'coordinates': [loc.lng, loc.lat],
-        },
+    try {
+      final state = ref.read(appControllerProvider);
+      final visible = state.cachedLocations
+          .where((loc) => state.followedUserIds.contains(loc.userId))
+          .toList();
+
+      final features = visible.map((loc) {
+        return {
+          'type': 'Feature',
+          'id': loc.userId,
+          'properties': {
+            'user_id': loc.userId,
+            'color': loc.color,
+          },
+          'geometry': {
+            'type': 'Point',
+            'coordinates': [loc.lng, loc.lat],
+          },
+        };
+      }).toList();
+
+      final featureCollection = {
+        'type': 'FeatureCollection',
+        'features': features,
       };
-    }).toList();
 
-    final featureCollection = {
-      'type': 'FeatureCollection',
-      'features': features,
-    };
+      try {
+        await controller.removeLayer(_circleLayerId);
+      } catch (_) {}
+      try {
+        await controller.removeSource(_geoJsonSourceId);
+      } catch (_) {}
 
-    try {
-      await controller.removeLayer(_circleLayerId);
-    } catch (_) {}
-    try {
-      await controller.removeSource(_geoJsonSourceId);
-    } catch (_) {}
-
-    try {
-      await controller.addGeoJsonSource(_geoJsonSourceId, featureCollection);
-      await controller.addCircleLayer(
-        _geoJsonSourceId,
-        _circleLayerId,
-        const CircleLayerProperties(
-          circleColor: [Expressions.get, 'color'],
-          circleRadius: 9.0,
-          circleStrokeWidth: 2.5,
-          circleStrokeColor: '#FFFFFF',
-        ),
-      );
-    } catch (_) {}
+      try {
+        await controller.addGeoJsonSource(_geoJsonSourceId, featureCollection);
+        await controller.addCircleLayer(
+          _geoJsonSourceId,
+          _circleLayerId,
+          const CircleLayerProperties(
+            circleColor: ['get', 'color'],
+            circleRadius: 9.0,
+            circleStrokeWidth: 2.5,
+            circleStrokeColor: '#FFFFFF',
+          ),
+        );
+      } catch (_) {}
+    } catch (_) {
+    } finally {
+      _isSyncingLayers = false;
+      if (_pendingLayerSync) {
+        _pendingLayerSync = false;
+        unawaited(_syncGeoJsonCircleLayer());
+      }
+    }
   }
 
   Future<void> _fitBoundsToVisibleMembers() async {

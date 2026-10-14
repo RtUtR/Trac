@@ -27,7 +27,7 @@
 
     <application
         android:label="FamilyTrack"
-        android:name="${applicationName}"
+        android:name=".MainApplication"
         android:icon="@mipmap/ic_launcher">
 
         <activity
@@ -52,7 +52,7 @@
             android:name="id.flutter.flutter_background_service.BackgroundService"
             android:foregroundServiceType="location"
             android:exported="false"
-            tools:replace="android:exported"
+            tools:replace="android:exported,android:foregroundServiceType"
             />
 
         <meta-data

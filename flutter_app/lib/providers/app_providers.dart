@@ -346,7 +346,11 @@ class AppController extends StateNotifier<AppState> {
     await _sendImmediateOwnPosition();
     await _activateGroupSession(group);
     if (state.locationPermissionGranted) {
-      await BackgroundLocationService.startIfPermitted();
+      try {
+        await BackgroundLocationService.startIfPermitted();
+      } catch (e) {
+        debugPrint('startIfPermitted error in joinGroup: $e');
+      }
     }
     return true;
   }
@@ -358,7 +362,11 @@ class AppController extends StateNotifier<AppState> {
     state = state.copyWith(isLoading: true, clearErrorCode: true);
     await _activateGroupSession(saved);
     if (state.locationPermissionGranted) {
-      await BackgroundLocationService.startIfPermitted();
+      try {
+        await BackgroundLocationService.startIfPermitted();
+      } catch (e) {
+        debugPrint('startIfPermitted error in resumeSavedGroup: $e');
+      }
     }
   }
 

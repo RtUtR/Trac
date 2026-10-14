@@ -84,7 +84,9 @@ class BackgroundLocationService {
         return;
       }
 
-      await initialize();
+      if (!_isConfigured) {
+        await initialize();
+      }
 
       final service = FlutterBackgroundService();
       try {
@@ -136,21 +138,36 @@ class BackgroundLocationService {
     // On Android, explicitly promote to foreground service with persistent notification
     if (service is AndroidServiceInstance) {
       service.on('setAsForeground').listen((_) {
-        service.setAsForegroundService();
+        try {
+          service.setAsForegroundService();
+        } catch (_) {}
       });
       service.on('setAsBackground').listen((_) {
-        service.setAsBackgroundService();
+        try {
+          service.setAsBackgroundService();
+        } catch (_) {}
       });
 
-      await service.setAsForegroundService();
-      service.setForegroundNotificationInfo(
-        title: 'FamilyTrack Location Active',
-        content: 'Sharing your latest location with your group in the background.',
-      );
+      try {
+        await service.setAsForegroundService();
+      } catch (e) {
+        debugPrint('Background isolate setAsForegroundService error: $e');
+      }
+
+      try {
+        service.setForegroundNotificationInfo(
+          title: 'FamilyTrack Location Active',
+          content: 'Sharing your latest location with your group in the background.',
+        );
+      } catch (e) {
+        debugPrint('Background isolate setForegroundNotificationInfo error: $e');
+      }
     }
 
     service.on('stopService').listen((_) {
-      service.stopSelf();
+      try {
+        service.stopSelf();
+      } catch (_) {}
     });
 
     if (!AppConfig.isSupabaseConfigured) {

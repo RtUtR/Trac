@@ -50,6 +50,8 @@ jobs:
           cp android/app/src/main/AndroidManifest.xml /tmp/AndroidManifest.xml
           cp android/app/proguard-rules.pro /tmp/proguard-rules.pro
           cp android/app/build.gradle /tmp/build.gradle
+          mkdir -p /tmp/kotlin_backup
+          cp -r android/app/src/main/kotlin/* /tmp/kotlin_backup/
           mkdir -p /tmp/drawable
           cp -r android/app/src/main/res/drawable/* /tmp/drawable/
           rm -rf android
@@ -58,6 +60,8 @@ jobs:
           cp /tmp/proguard-rules.pro android/app/proguard-rules.pro
           mkdir -p android/app/src/main/res/drawable
           cp -r /tmp/drawable/* android/app/src/main/res/drawable/
+          mkdir -p android/app/src/main/kotlin
+          cp -r /tmp/kotlin_backup/* android/app/src/main/kotlin/
           sed -i 's/ package="[^"]*"//' android/app/src/main/AndroidManifest.xml
           if ! grep -q "android.builtInKotlin=false" android/gradle.properties; then
             echo "android.builtInKotlin=false" >> android/gradle.properties
