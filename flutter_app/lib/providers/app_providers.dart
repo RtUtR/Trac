@@ -255,7 +255,9 @@ class AppController extends StateNotifier<AppState> {
 
       await _activateGroupSession(effectiveSummary, silent: true);
       if (state.locationPermissionGranted) {
-        await BackgroundLocationService.startIfPermitted();
+        try {
+          await BackgroundLocationService.startIfPermitted();
+        } catch (_) {}
       }
     } catch (_) {
       // Offline: keep cached active group session intact

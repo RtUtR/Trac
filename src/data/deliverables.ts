@@ -46,7 +46,7 @@ export const DELIVERABLE_FILES: DeliverableFile[] = [
     category: 'platform',
     language: 'yaml',
     summary:
-      'Fixed GitHub Actions workflow: safely writes config/env.json from secrets.ENV_JSON, preserves AndroidManifest.xml and proguard-rules.pro across flutter create, sets minSdk=23, and disables R8 shrinking in build.gradle(.kts).',
+      'Fixed GitHub Actions workflow: preserves AndroidManifest.xml, build.gradle, drawables, and proguard-rules.pro across flutter create, sets minSdk=23, and disables R8 shrinking to prevent missing class / native crash on open.',
     content: githubWorkflowRaw,
   },
   {
@@ -56,7 +56,7 @@ export const DELIVERABLE_FILES: DeliverableFile[] = [
     category: 'platform',
     language: 'xml',
     summary:
-      'Uses android:name=".MainActivity" and android:icon="@mipmap/ic_launcher" to match flutter create --org com.familytrack --project-name family_track, plus tools:replace="android:exported" on BackgroundService.',
+      'Uses android:name=".MainActivity" and android:icon="@mipmap/ic_launcher" with valid tools:replace="android:exported" on BackgroundService, compliant with Play Store and Android 14 location foreground service requirements.',
     content: androidManifestRaw,
   },
   {

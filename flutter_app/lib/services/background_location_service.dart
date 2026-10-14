@@ -50,7 +50,7 @@ class BackgroundLocationService {
           autoStart: false,
           autoStartOnBoot: false,
           isForegroundMode: true,
-          notificationChannelId: 'familytrack_location_channel',
+          notificationChannelId: 'my_foreground',
           initialNotificationTitle: 'FamilyTrack Location Active',
           initialNotificationContent:
               'Sharing your latest location with your group in the background.',
@@ -87,9 +87,13 @@ class BackgroundLocationService {
       await initialize();
 
       final service = FlutterBackgroundService();
-      final isRunning = await service.isRunning();
-      if (!isRunning) {
-        await service.startService();
+      try {
+        final isRunning = await service.isRunning();
+        if (!isRunning) {
+          await service.startService();
+        }
+      } catch (serviceErr) {
+        debugPrint('BackgroundLocationService startService error caught: $serviceErr');
       }
     } catch (e) {
       debugPrint('BackgroundLocationService startIfPermitted error: $e');

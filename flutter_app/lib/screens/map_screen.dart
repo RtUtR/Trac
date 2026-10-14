@@ -38,7 +38,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
   bool _hasFitInitialBounds = false;
   bool _hasSavedCamera = false;
 
-  late CameraPosition _initialCameraPosition;
+  CameraPosition _initialCameraPosition = const CameraPosition(
+    target: LatLng(0.0, 0.0),
+    zoom: 2.0,
+  );
 
   @override
   void initState() {
@@ -49,23 +52,28 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // (a) last saved camera from shared_preferences
     // (b) last known device position at zoom ~14
     // (c) only if neither exists, world view at zoom 2 (no city) until location arrives
-    final prefs = ref.read(sharedPreferencesProvider);
-    final savedLat = prefs.getDouble('ft_camera_lat');
-    final savedLng = prefs.getDouble('ft_camera_lng');
-    final savedZoom = prefs.getDouble('ft_camera_zoom');
+    try {
+      final prefs = ref.read(sharedPreferencesProvider);
+      final savedLat = prefs.getDouble('ft_camera_lat');
+      final savedLng = prefs.getDouble('ft_camera_lng');
+      final savedZoom = prefs.getDouble('ft_camera_zoom');
 
-    if (savedLat != null && savedLng != null && savedZoom != null) {
-      _hasSavedCamera = true;
-      _initialCameraPosition = CameraPosition(
-        target: LatLng(savedLat, savedLng),
-        zoom: savedZoom,
-      );
-    } else {
-      // World view at zoom 2 (no city)
-      _initialCameraPosition = const CameraPosition(
-        target: LatLng(0.0, 0.0),
-        zoom: 2.0,
-      );
+      if (savedLat != null &&
+          savedLng != null &&
+          savedZoom != null &&
+          savedLat >= -90 &&
+          savedLat <= 90 &&
+          savedLng >= -180 &&
+          savedLng <= 180) {
+        _hasSavedCamera = true;
+        _initialCameraPosition = CameraPosition(
+          target: LatLng(savedLat, savedLng),
+          zoom: savedZoom,
+        );
+      } else {
+        _resolveDevicePositionOnStart();
+      }
+    } catch (_) {
       _resolveDevicePositionOnStart();
     }
 
@@ -77,6 +85,15 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
   Future<void> _resolveDevicePositionOnStart() async {
     try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) return;
+
+      final perm = await Geolocator.checkPermission();
+      if (perm != LocationPermission.always &&
+          perm != LocationPermission.whileInUse) {
+        return;
+      }
+
       final lastKnown = await Geolocator.getLastKnownPosition();
       if (lastKnown != null && mounted && !_hasSavedCamera) {
         _mapController?.animateCamera(
@@ -91,7 +108,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       final pos = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.medium,
-          timeLimit: Duration(seconds: 6),
+          timeLimit: Duration(seconds: 5),
         ),
       );
       if (mounted && !_hasSavedCamera) {

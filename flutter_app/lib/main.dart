@@ -105,12 +105,18 @@ class FamilyTrackApp extends ConsumerStatefulWidget {
 
 class _FamilyTrackAppState extends ConsumerState<FamilyTrackApp> {
   late final AppLifecycleListener _lifecycleListener;
+  bool _isFirstLaunch = true;
 
   @override
   void initState() {
     super.initState();
     _lifecycleListener = AppLifecycleListener(
       onResume: () {
+        // Prevent onResume from colliding with initial bootstrap on cold app launch
+        if (_isFirstLaunch) {
+          _isFirstLaunch = false;
+          return;
+        }
         if (widget.isConfigured) {
           ref.read(appControllerProvider.notifier).onAppResumed();
         }
