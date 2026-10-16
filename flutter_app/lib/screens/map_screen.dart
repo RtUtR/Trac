@@ -1108,7 +1108,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     String text;
     if (lastSentAtMs == null) {
       text = lastCheckStatus ??
-          'Background service active • Checking location every 3 min';
+          'Background service active • Sends when moved >= 75m';
     } else {
       final elapsedSec =
           (DateTime.now().millisecondsSinceEpoch - lastSentAtMs) ~/ 1000;

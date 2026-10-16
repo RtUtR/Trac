@@ -346,7 +346,7 @@ class AppController extends StateNotifier<AppState> {
     final group = result.group!;
     await _saveLocalGroupSummary(group);
 
-    await _sendImmediateOwnPosition();
+    await BackgroundLocationService.sendIfMoved(reason: 'joined group');
     await _activateGroupSession(group);
     return true;
   }
@@ -360,7 +360,7 @@ class AppController extends StateNotifier<AppState> {
   }
 
   /// Called whenever the app returns to the foreground.
-  /// Sends one location immediately (independent of distance and timer) as required,
+  /// Checks distance from last successfully sent location (sends if moved >= 75m),
   /// reloads session tokens from storage into SupabaseClient, re-verifies permissions,
   /// keeps background service alive, and updates member list.
   Future<void> onAppResumed() async {
@@ -376,8 +376,8 @@ class AppController extends StateNotifier<AppState> {
           state = state.copyWith(activeGroup: group, lastSavedGroup: group);
         }
 
-        // Send one location immediately when returning to foreground (independent of distance & timer)
-        unawaited(_sendImmediateOwnPosition());
+        // Only send if moved >= 75m (or initial fix); do not send if stationary
+        unawaited(BackgroundLocationService.sendIfMoved(reason: 'app resumed'));
 
         if (state.locationPermissionGranted) {
           unawaited(BackgroundLocationService.startIfPermitted());

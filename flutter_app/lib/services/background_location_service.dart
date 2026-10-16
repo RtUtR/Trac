@@ -256,18 +256,25 @@ class BackgroundLocationService {
     });
   }
 
-  /// Trigger 1: Movement check
-  static Future<void> _handleMovementFix(
-    Position position,
+  /// Evaluates whether a location fix should be sent to the server:
+  /// 1. If accuracy > 100m: ignores fix (records poor accuracy reason).
+  /// 2. If no last-sent record exists: sends initial fix to establish baseline.
+  /// 3. Computes distance between last successfully sent location and current location.
+  /// 4. If distance >= MIN_MOVE_METERS (75m): automatically sends new location to server.
+  /// 5. If distance < 75m: does NOT send anything (records skipped log).
+  static Future<void> _evaluateAndSendIfMoved({
+    required Position position,
+    required String triggerSource,
     ServiceInstance? service,
-  ) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.reload();
+    SharedPreferences? prefs,
+  }) async {
+    final p = prefs ?? await SharedPreferences.getInstance();
+    await p.reload();
 
     // Ignore fixes with accuracy worse than 100 m (record the reason)
     if (position.accuracy > 100.0) {
       await _recordLog(
-        prefs: prefs,
+        prefs: p,
         lat: position.latitude,
         lng: position.longitude,
         accuracy: position.accuracy,
@@ -280,22 +287,23 @@ class BackgroundLocationService {
       return;
     }
 
-    final lastLat = prefs.getDouble(_prefLastSentLat);
-    final lastLng = prefs.getDouble(_prefLastSentLng);
-    final lastSentAtMs = prefs.getInt(_prefLastSentAtMs);
+    final lastLat = p.getDouble(_prefLastSentLat);
+    final lastLng = p.getDouble(_prefLastSentLng);
+    final lastSentAtMs = p.getInt(_prefLastSentAtMs);
 
+    // If there is no last-sent record: send initial position
     if (lastLat == null || lastLng == null || lastSentAtMs == null) {
-      // No last-sent record: send immediately
       await _sendPosition(
         position: position,
-        decision: 'sent: first fix (movement stream)',
+        decision: 'sent: first fix ($triggerSource)',
         distance: null,
         service: service,
-        prefs: prefs,
+        prefs: p,
       );
       return;
     }
 
+    // Calculate distance between last successfully sent location and current location
     final distance = Geolocator.distanceBetween(
       lastLat,
       lastLng,
@@ -303,18 +311,20 @@ class BackgroundLocationService {
       position.longitude,
     );
 
-    // If the distance is >= MIN_MOVE_METERS (75 m) send immediately
+    // If the distance is 75 meters or more, automatically send the new location to the server
     if (distance >= AppConfig.MIN_MOVE_METERS) {
       await _sendPosition(
         position: position,
-        decision: 'sent: moved ${distance.round()}m (>= ${AppConfig.MIN_MOVE_METERS.round()}m)',
+        decision:
+            'sent: moved ${distance.round()}m (>= ${AppConfig.MIN_MOVE_METERS.round()}m)',
         distance: distance,
         service: service,
-        prefs: prefs,
+        prefs: p,
       );
     } else {
+      // If the distance is less than 75 meters, do not send anything
       await _recordLog(
-        prefs: prefs,
+        prefs: p,
         lat: position.latitude,
         lng: position.longitude,
         accuracy: position.accuracy,
@@ -327,7 +337,22 @@ class BackgroundLocationService {
     }
   }
 
-  /// Trigger 2: Time check every 30 seconds
+  /// Trigger 1: Movement check
+  static Future<void> _handleMovementFix(
+    Position position,
+    ServiceInstance? service,
+  ) async {
+    await _evaluateAndSendIfMoved(
+      position: position,
+      triggerSource: 'movement stream',
+      service: service,
+    );
+  }
+
+  /// Trigger 2: Periodic distance check
+  /// Checks distance between last successfully sent location and current location.
+  /// If distance >= 75 meters, sends to server.
+  /// If distance < 75 meters, does NOT send anything.
   static Future<void> _handleTimeTrigger(ServiceInstance? service) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -342,66 +367,106 @@ class BackgroundLocationService {
         return;
       }
 
-      final lastSentAtMs = prefs.getInt(_prefLastSentAtMs);
-      final nowMs = DateTime.now().millisecondsSinceEpoch;
-
-      bool timeElapsed = false;
-      int elapsedSec = 0;
-      if (lastSentAtMs == null) {
-        timeElapsed = true;
-      } else {
-        elapsedSec = (nowMs - lastSentAtMs) ~/ 1000;
-        if (elapsedSec >= AppConfig.SEND_INTERVAL) {
-          timeElapsed = true;
-        }
-      }
-
-      if (!timeElapsed) return;
-
       final position = await _getCurrentPositionSafe();
-      if (position == null) {
-        await _recordLog(
-          prefs: prefs,
-          lat: null,
-          lng: null,
-          accuracy: null,
-          distance: null,
-          decision: 'failed: time trigger could not acquire GPS fix',
-          method: 'none',
-          statusOrError: 'no_fix',
-        );
-        return;
-      }
+      if (position == null) return;
 
-      final lastLat = prefs.getDouble(_prefLastSentLat);
-      final lastLng = prefs.getDouble(_prefLastSentLng);
-      double? distance;
-      if (lastLat != null && lastLng != null) {
-        distance = Geolocator.distanceBetween(
-          lastLat,
-          lastLng,
-          position.latitude,
-          position.longitude,
-        );
-      }
-
-      final reason = lastSentAtMs == null
-          ? 'sent: initial fix'
-          : 'sent: timer (${elapsedSec}s >= ${AppConfig.SEND_INTERVAL}s)';
-
-      await _sendPosition(
+      await _evaluateAndSendIfMoved(
         position: position,
-        decision: reason,
-        distance: distance,
+        triggerSource: 'periodic check',
         service: service,
         prefs: prefs,
       );
     } catch (e) {
-      debugPrint('Time trigger exception: $e');
+      debugPrint('Periodic check error: $e');
     }
   }
 
-  /// Sends a fresh device GPS fix immediately from foreground (e.g. Refresh button, resume, join)
+  /// Evaluates current position and sends ONLY if moved >= 75m or initial fix.
+  /// If moved < 75m, does NOT send anything.
+  static Future<bool> sendIfMoved({
+    required String reason,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) return false;
+
+      final perm = await Geolocator.checkPermission();
+      if (perm != LocationPermission.always &&
+          perm != LocationPermission.whileInUse) {
+        return false;
+      }
+
+      final position = await _getCurrentPositionSafe();
+      if (position == null) return false;
+
+      if (position.accuracy > 100.0) {
+        await _recordLog(
+          prefs: prefs,
+          lat: position.latitude,
+          lng: position.longitude,
+          accuracy: position.accuracy,
+          distance: null,
+          decision:
+              'skipped: accuracy ${position.accuracy.toStringAsFixed(1)}m > 100m',
+          method: 'none',
+          statusOrError: 'poor_accuracy',
+        );
+        return false;
+      }
+
+      final lastLat = prefs.getDouble(_prefLastSentLat);
+      final lastLng = prefs.getDouble(_prefLastSentLng);
+      final lastSentAtMs = prefs.getInt(_prefLastSentAtMs);
+
+      if (lastLat == null || lastLng == null || lastSentAtMs == null) {
+        return await _sendPosition(
+          position: position,
+          decision: 'sent: initial fix ($reason)',
+          distance: null,
+          prefs: prefs,
+        );
+      }
+
+      final distance = Geolocator.distanceBetween(
+        lastLat,
+        lastLng,
+        position.latitude,
+        position.longitude,
+      );
+
+      if (distance >= AppConfig.MIN_MOVE_METERS) {
+        return await _sendPosition(
+          position: position,
+          decision:
+              'sent: moved ${distance.round()}m (>= ${AppConfig.MIN_MOVE_METERS.round()}m)',
+          distance: distance,
+          prefs: prefs,
+        );
+      } else {
+        await _recordLog(
+          prefs: prefs,
+          lat: position.latitude,
+          lng: position.longitude,
+          accuracy: position.accuracy,
+          distance: distance,
+          decision:
+              'skipped: moved ${distance.round()}m (< ${AppConfig.MIN_MOVE_METERS.round()}m)',
+          method: 'none',
+          statusOrError: 'n/a',
+        );
+        return false;
+      }
+    } catch (e) {
+      debugPrint('sendIfMoved error: $e');
+      return false;
+    }
+  }
+
+  /// Sends a fresh device GPS fix immediately from foreground (e.g. Refresh button in UI).
+  /// EXCEPTION: The location must be sent to the server immediately, regardless of the distance moved.
   /// using the EXACT SAME send function and updating the SAME persisted "last sent" record.
   static Future<bool> sendImmediateFix({
     required String reason,
