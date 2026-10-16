@@ -111,14 +111,13 @@ class AppConfig {
   static const Duration mapReadyTimeout = Duration(seconds: 20);
 
   // Background location sending parameters:
-  // Timer runs every 3 minutes; sends if moved > 75m or if 20 min heartbeat elapsed
-  static const int locationCheckIntervalSeconds = 180; // 3 minutes
-  static const double minMoveMeters = 75.0; // 75 meters
-  static const int heartbeatIntervalSeconds = 1200; // 20 minutes
+  // Constants: MIN_MOVE_METERS = 75, SEND_INTERVAL = 180 seconds. Old 20-min heartbeat removed.
+  static const double MIN_MOVE_METERS = 75.0; // 75 meters
+  static const int SEND_INTERVAL = 180; // 180 seconds (3 minutes)
 
-  // Backward-compatibility aliases
-  static const int movingIntervalSeconds = locationCheckIntervalSeconds;
-  static const double minDisplacementMeters = minMoveMeters;
-  static const int stationaryHeartbeatSeconds = heartbeatIntervalSeconds;
+  // Aliases for compatibility
+  static const double minMoveMeters = MIN_MOVE_METERS;
+  static const int sendIntervalSeconds = SEND_INTERVAL;
+  static const int locationCheckIntervalSeconds = SEND_INTERVAL;
 }
 

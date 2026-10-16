@@ -12,6 +12,7 @@ import {
   FastForward,
   WifiOff,
   Wifi,
+  Crosshair,
 } from 'lucide-react';
 
 export type MapStyleOption = 'positron' | 'bright' | 'dark';

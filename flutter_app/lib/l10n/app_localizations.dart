@@ -97,6 +97,13 @@ class AppLocalizations {
           'Authentication session expired. Returning to login screen.',
       'err_invalid_target':
           'One or more selected members are no longer in this group.',
+      'locate_me': 'Locate me',
+      'locating': 'Finding location...',
+      'service_logs_title': 'Location Service Activity (Last 20)',
+      'copy_logs': 'Copy Logs',
+      'logs_copied': 'Location logs copied to clipboard',
+      'my_location_sent': 'Location sent successfully',
+      'my_location_failed': 'Failed to send location',
     },
     'fa': {
       'app_title': 'همراه خانواده',
@@ -178,6 +185,13 @@ class AppLocalizations {
           'نشست کاربری منقضی شده است. لطفاً دوباره وارد شوید.',
       'err_invalid_target':
           'یک یا چند نفر از اعضای انتخاب‌شده دیگر در این گروه حضور ندارند.',
+      'locate_me': 'موقعیت من',
+      'locating': 'در حال یافتن موقعیت...',
+      'service_logs_title': 'گزارش فعالیت سرویس موقعیت (۲۰ مورد اخیر)',
+      'copy_logs': 'کپی گزارش',
+      'logs_copied': 'گزارش موقعیت در کلیپ‌بورد کپی شد',
+      'my_location_sent': 'موقعیت مکانی شما با موفقیت ارسال شد',
+      'my_location_failed': 'ارسال موقعیت مکانی ناموفق بود',
     },
   };
 

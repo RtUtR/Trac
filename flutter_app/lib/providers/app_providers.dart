@@ -559,19 +559,19 @@ class AppController extends StateNotifier<AppState> {
     );
 
     if (result.ok) {
-      final cooldownSec = result.cooldownSeconds ?? 180;
+      final cooldownSec = result.cooldownSeconds;
       await _prefs.setString(
         'ft_cached_locs_${group.id}',
         jsonEncode(result.locations.map((l) => l.toJson()).toList()),
       );
 
-      if (cooldownSec > 0) {
+      if (cooldownSec != null && cooldownSec > 0) {
         _startCooldownTicker(group.id, cooldownSec);
       }
 
       state = state.copyWith(
         cachedLocations: result.locations,
-        cooldownRemainingSeconds: cooldownSec,
+        cooldownRemainingSeconds: cooldownSec ?? 0,
         isLoading: false,
       );
       return;
@@ -579,8 +579,10 @@ class AppController extends StateNotifier<AppState> {
 
     final err = result.errorCode ?? 'server_error';
     if (err == 'cooldown_active') {
-      final rem = result.remainingSeconds ?? 180;
-      _startCooldownTicker(group.id, rem);
+      final rem = result.remainingSeconds ?? 0;
+      if (rem > 0) {
+        _startCooldownTicker(group.id, rem);
+      }
       state = state.copyWith(
         cooldownRemainingSeconds: rem,
         isLoading: false,
@@ -597,17 +599,17 @@ class AppController extends StateNotifier<AppState> {
           targetUserIds: targets,
         );
         if (retryResult.ok) {
-          final cooldownSec = retryResult.cooldownSeconds ?? 180;
+          final cooldownSec = retryResult.cooldownSeconds;
           await _prefs.setString(
             'ft_cached_locs_${group.id}',
             jsonEncode(retryResult.locations.map((l) => l.toJson()).toList()),
           );
-          if (cooldownSec > 0) {
+          if (cooldownSec != null && cooldownSec > 0) {
             _startCooldownTicker(group.id, cooldownSec);
           }
           state = state.copyWith(
             cachedLocations: retryResult.locations,
-            cooldownRemainingSeconds: cooldownSec,
+            cooldownRemainingSeconds: cooldownSec ?? 0,
             isLoading: false,
           );
           return;
@@ -635,7 +637,20 @@ class AppController extends StateNotifier<AppState> {
     );
   }
 
-  Future<void> _sendImmediateOwnPosition() async {
+  /// Triggered by top Refresh button:
+  /// 1. Sends own location immediately (fresh GPS fix, upsert into public.locations)
+  ///    regardless of the fetch cooldown.
+  /// 2. If fetch is on cooldown, still sends my location and just shows the remaining seconds.
+  /// 3. If fetch is not on cooldown, fetches followed members.
+  Future<void> onTopRefreshPressed() async {
+    await _sendImmediateOwnPosition('manual refresh');
+
+    if (state.cooldownRemainingSeconds == 0) {
+      await fetchFollowedLocations();
+    }
+  }
+
+  Future<void> _sendImmediateOwnPosition([String reason = 'immediate send']) async {
     try {
       final serviceOn = await Geolocator.isLocationServiceEnabled();
       if (!serviceOn) return;
@@ -645,25 +660,7 @@ class AppController extends StateNotifier<AppState> {
         return;
       }
 
-      Position? pos;
-      try {
-        pos = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.high,
-            timeLimit: Duration(seconds: 10),
-          ),
-        );
-      } catch (_) {
-        pos = await Geolocator.getLastKnownPosition();
-      }
-
-      if (pos != null) {
-        await _supabase.upsertOwnLocation(
-          lat: pos.latitude,
-          lng: pos.longitude,
-          accuracy: pos.accuracy,
-        );
-      }
+      await BackgroundLocationService.sendImmediateFix(reason: reason);
     } catch (_) {}
   }
 
