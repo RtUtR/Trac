@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/app_config.dart';
@@ -294,6 +295,13 @@ class AppController extends StateNotifier<AppState> {
       }
       if (perm == LocationPermission.whileInUse) {
         perm = await Geolocator.requestPermission();
+      }
+    } catch (_) {}
+
+    try {
+      final notifStatus = await Permission.notification.status;
+      if (!notifStatus.isGranted) {
+        await Permission.notification.request();
       }
     } catch (_) {}
 

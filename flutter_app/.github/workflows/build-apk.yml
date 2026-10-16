@@ -45,10 +45,9 @@ jobs:
           fi
           python3 -m json.tool config/env.json > /dev/null
 
-      - name: Regenerate Android scaffold with the current Flutter template (keep AndroidManifest.xml)
+      - name: Regenerate Android scaffold with the current Flutter template (keep only AndroidManifest.xml)
         run: |
           cp android/app/src/main/AndroidManifest.xml /tmp/AndroidManifest.xml
-          cp android/app/build.gradle /tmp/build.gradle
           rm -rf android
           flutter create . --platforms=android --org com.familytrack --project-name family_track
           cp /tmp/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
@@ -56,8 +55,6 @@ jobs:
           if ! grep -q "android.builtInKotlin=false" android/gradle.properties; then
             echo "android.builtInKotlin=false" >> android/gradle.properties
           fi
-          rm -f android/app/build.gradle.kts
-          cp /tmp/build.gradle android/app/build.gradle
 
       - run: flutter pub get
 

@@ -16,13 +16,13 @@ dependencies:
   flutter_riverpod: ^2.6.1
   supabase_flutter: ^2.8.4
   geolocator: ^13.0.2
+  permission_handler: ^11.4.0
   flutter_background_service: ^5.1.0
   flutter_background_service_android: ^6.3.0
   flutter_background_service_ios: ^5.0.3
   maplibre_gl: ^0.27.1
   url_launcher: ^6.3.1
   shared_preferences: ^2.5.2
-  flutter_local_notifications: ^18.0.1
 
 dev_dependencies:
   flutter_test:

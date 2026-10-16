@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../config/app_config.dart';
 import '../l10n/app_localizations.dart';
@@ -53,11 +54,19 @@ class _MapScreenState extends ConsumerState<MapScreen>
     super.initState();
     _startMapLoadingCycle();
 
-    // Start background location service only after the first frame has rendered,
+    // Request notification permission (POST_NOTIFICATIONS on Android 13+) with permission_handler,
+    // and start background location service only after the first frame has rendered,
     // and only when location permission is already granted.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       try {
+        try {
+          final notifStatus = await Permission.notification.status;
+          if (!notifStatus.isGranted) {
+            await Permission.notification.request();
+          }
+        } catch (_) {}
+
         final state = ref.read(appControllerProvider);
         if (state.locationPermissionGranted) {
           await BackgroundLocationService.startIfPermitted();
