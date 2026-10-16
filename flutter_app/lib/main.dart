@@ -13,6 +13,23 @@ import 'screens/consent_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/map_screen.dart';
 
+/// Persists the last uncaught global error to SharedPreferences so it can be inspected
+/// and copied directly from the UI on the device.
+Future<void> recordGlobalError(String source, Object error, [StackTrace? stack]) async {
+  final now = DateTime.now().toLocal();
+  final timeStr =
+      '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}';
+  final message = '[$source] $error';
+  debugPrint('$message\n${stack ?? ''}');
+
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('ft_last_error_message', message);
+    await prefs.setString('ft_last_error_stack', stack?.toString() ?? '');
+    await prefs.setString('ft_last_error_time', timeStr);
+  } catch (_) {}
+}
+
 void main() {
   // Catch all synchronous and asynchronous errors so the app never force-closes silently.
   runZonedGuarded(() async {
@@ -20,11 +37,11 @@ void main() {
 
     FlutterError.onError = (FlutterErrorDetails details) {
       FlutterError.presentError(details);
-      debugPrint('FlutterError: ${details.exceptionAsString()}');
+      recordGlobalError('FlutterError', details.exceptionAsString(), details.stack);
     };
 
     PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
-      debugPrint('PlatformDispatcher Error: $error\n$stack');
+      recordGlobalError('PlatformDispatcher', error, stack);
       return true; // Prevent native force-close on uncaught async error
     };
 
@@ -85,7 +102,7 @@ void main() {
       ),
     );
   }, (Object error, StackTrace stackTrace) {
-    debugPrint('Uncaught Zone Error: $error\n$stackTrace');
+    recordGlobalError('Zone', error, stackTrace);
   });
 }
 

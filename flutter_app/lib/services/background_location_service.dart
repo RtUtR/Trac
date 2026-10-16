@@ -6,6 +6,7 @@ import 'dart:ui';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_background_service_android/flutter_background_service_android.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -36,12 +37,52 @@ class BackgroundLocationService {
   static const String _prefRefreshToken = 'ft_refresh_token';
 
   static bool _isConfigured = false;
+  static bool _notificationChannelCreated = false;
+
+  /// Requests POST_NOTIFICATIONS permission on Android 13+ and creates the foreground
+  /// notification channel ('my_foreground') before the background service is configured or started.
+  static Future<void> requestNotificationPermission() async {
+    if (_notificationChannelCreated) return;
+    try {
+      final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+      const initializationSettingsAndroid =
+          AndroidInitializationSettings('@mipmap/ic_launcher');
+      const initializationSettings = InitializationSettings(
+        android: initializationSettingsAndroid,
+      );
+      await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+
+      final androidImplementation =
+          flutterLocalNotificationsPlugin.resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>();
+
+      if (androidImplementation != null) {
+        const channel = AndroidNotificationChannel(
+          'my_foreground',
+          'FamilyTrack Location Active',
+          description:
+              'Sharing your latest location with your group in the background.',
+          importance: Importance.low,
+        );
+        await androidImplementation.createNotificationChannel(channel);
+        try {
+          await androidImplementation.requestNotificationsPermission();
+        } catch (_) {}
+        _notificationChannelCreated = true;
+      }
+    } catch (e) {
+      debugPrint('Notification channel/permission setup caught: $e');
+    }
+  }
 
   static Future<void> initialize() async {
     if (!AppConfig.isSupabaseConfigured) return;
     if (_isConfigured) return;
 
     try {
+      // Create notification channel first to prevent BadForegroundServiceNotificationException
+      await requestNotificationPermission();
+
       final service = FlutterBackgroundService();
 
       await service.configure(
@@ -70,19 +111,28 @@ class BackgroundLocationService {
   }
 
   /// Configures and starts the foreground/background service ONLY after verifying that
-  /// location services are enabled and runtime location permission is granted.
+  /// location services are enabled, runtime location permission is ALREADY GRANTED
+  /// ("While in use" or "Always"), and notification permission has been requested.
+  /// Never throws or crashes: reports any failure in the status line so it can be retried.
   static Future<void> startIfPermitted() async {
     if (!AppConfig.isSupabaseConfigured) return;
 
     try {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) return;
+      if (!serviceEnabled) {
+        debugPrint('startIfPermitted: location service is disabled');
+        return;
+      }
 
       final permission = await Geolocator.checkPermission();
       if (permission != LocationPermission.always &&
           permission != LocationPermission.whileInUse) {
+        debugPrint('startIfPermitted: location permission not granted ($permission)');
         return;
       }
+
+      // Request notification permission and create channel before configure
+      await requestNotificationPermission();
 
       if (!_isConfigured) {
         await initialize();
@@ -92,13 +142,36 @@ class BackgroundLocationService {
       try {
         final isRunning = await service.isRunning();
         if (!isRunning) {
-          await service.startService();
+          final ok = await service.startService();
+          if (!ok) {
+            try {
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setString(
+                _prefLastCheckStatus,
+                'Background service failed to start',
+              );
+            } catch (_) {}
+          }
         }
       } catch (serviceErr) {
         debugPrint('BackgroundLocationService startService error caught: $serviceErr');
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString(
+            _prefLastCheckStatus,
+            'Background service error: $serviceErr',
+          );
+        } catch (_) {}
       }
     } catch (e) {
       debugPrint('BackgroundLocationService startIfPermitted error: $e');
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(
+          _prefLastCheckStatus,
+          'Background service error: $e',
+        );
+      } catch (_) {}
     }
   }
 
