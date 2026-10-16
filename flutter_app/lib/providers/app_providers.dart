@@ -254,16 +254,6 @@ class AppController extends StateNotifier<AppState> {
       );
 
       await _activateGroupSession(effectiveSummary, silent: true);
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        await refreshPermissionStatus();
-        if (state.locationPermissionGranted) {
-          try {
-            await BackgroundLocationService.startIfPermitted();
-          } catch (e) {
-            debugPrint('startIfPermitted error in bootstrap: $e');
-          }
-        }
-      });
     } catch (_) {
       // Offline: keep cached active group session intact
       if (state.activeGroup == null) {
@@ -298,12 +288,11 @@ class AppController extends StateNotifier<AppState> {
     } catch (_) {}
 
     try {
-      await BackgroundLocationService.requestNotificationPermission();
-    } catch (_) {}
-
-    try {
       LocationPermission perm = await Geolocator.checkPermission();
       if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.whileInUse) {
         perm = await Geolocator.requestPermission();
       }
     } catch (_) {}
@@ -351,14 +340,6 @@ class AppController extends StateNotifier<AppState> {
 
     await _sendImmediateOwnPosition();
     await _activateGroupSession(group);
-    await refreshPermissionStatus();
-    if (state.locationPermissionGranted) {
-      try {
-        await BackgroundLocationService.startIfPermitted();
-      } catch (e) {
-        debugPrint('startIfPermitted error in joinGroup: $e');
-      }
-    }
     return true;
   }
 
@@ -368,14 +349,6 @@ class AppController extends StateNotifier<AppState> {
     if (saved == null) return;
     state = state.copyWith(isLoading: true, clearErrorCode: true);
     await _activateGroupSession(saved);
-    await refreshPermissionStatus();
-    if (state.locationPermissionGranted) {
-      try {
-        await BackgroundLocationService.startIfPermitted();
-      } catch (e) {
-        debugPrint('startIfPermitted error in resumeSavedGroup: $e');
-      }
-    }
   }
 
   /// Called whenever the app returns to the foreground.

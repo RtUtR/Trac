@@ -13,19 +13,14 @@ import 'screens/consent_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/map_screen.dart';
 
-/// Persists the last uncaught global error to SharedPreferences so it can be inspected
-/// and copied directly from the UI on the device.
-Future<void> recordGlobalError(String source, Object error, [StackTrace? stack]) async {
-  final now = DateTime.now().toLocal();
-  final timeStr =
-      '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}';
-  final message = '[$source] $error';
-  debugPrint('$message\n${stack ?? ''}');
-
+Future<void> _recordLastError(String message, String? stack) async {
   try {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('ft_last_error_message', message);
-    await prefs.setString('ft_last_error_stack', stack?.toString() ?? '');
+    final timeStr = DateTime.now().toLocal().toIso8601String().substring(11, 19);
+    await prefs.setString('ft_last_error_msg', message);
+    if (stack != null && stack.isNotEmpty) {
+      await prefs.setString('ft_last_error_stack', stack);
+    }
     await prefs.setString('ft_last_error_time', timeStr);
   } catch (_) {}
 }
@@ -37,11 +32,19 @@ void main() {
 
     FlutterError.onError = (FlutterErrorDetails details) {
       FlutterError.presentError(details);
-      recordGlobalError('FlutterError', details.exceptionAsString(), details.stack);
+      debugPrint('FlutterError: ${details.exceptionAsString()}');
+      _recordLastError(
+        details.exceptionAsString(),
+        details.stack?.toString(),
+      );
     };
 
     PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
-      recordGlobalError('PlatformDispatcher', error, stack);
+      debugPrint('PlatformDispatcher Error: $error\n$stack');
+      _recordLastError(
+        error.toString(),
+        stack.toString(),
+      );
       return true; // Prevent native force-close on uncaught async error
     };
 
@@ -102,7 +105,11 @@ void main() {
       ),
     );
   }, (Object error, StackTrace stackTrace) {
-    recordGlobalError('Zone', error, stackTrace);
+    debugPrint('Uncaught Zone Error: $error\n$stackTrace');
+    _recordLastError(
+      error.toString(),
+      stackTrace.toString(),
+    );
   });
 }
 

@@ -12,6 +12,7 @@ import '../config/app_config.dart';
 import '../l10n/app_localizations.dart';
 import '../models/models.dart';
 import '../providers/app_providers.dart';
+import '../services/background_location_service.dart';
 
 class MapScreen extends ConsumerStatefulWidget {
   const MapScreen({super.key});
@@ -51,6 +52,20 @@ class _MapScreenState extends ConsumerState<MapScreen>
   void initState() {
     super.initState();
     _startMapLoadingCycle();
+
+    // Start background location service only after the first frame has rendered,
+    // and only when location permission is already granted.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      try {
+        final state = ref.read(appControllerProvider);
+        if (state.locationPermissionGranted) {
+          await BackgroundLocationService.startIfPermitted();
+        }
+      } catch (e) {
+        debugPrint('PostFrame background start error: $e');
+      }
+    });
 
     // 1. Initial camera priority:
     // (a) last saved camera from shared_preferences
@@ -100,14 +115,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
       final lastKnown = await Geolocator.getLastKnownPosition();
       if (lastKnown != null && mounted && !_hasSavedCamera) {
-        try {
-          await _mapController?.animateCamera(
-            CameraUpdate.newLatLngZoom(
-              LatLng(lastKnown.latitude, lastKnown.longitude),
-              14.0,
-            ),
-          );
-        } catch (_) {}
+        _mapController?.animateCamera(
+          CameraUpdate.newLatLngZoom(
+            LatLng(lastKnown.latitude, lastKnown.longitude),
+            14.0,
+          ),
+        );
         return;
       }
 
@@ -118,23 +131,18 @@ class _MapScreenState extends ConsumerState<MapScreen>
         ),
       );
       if (mounted && !_hasSavedCamera) {
-        try {
-          await _mapController?.animateCamera(
-            CameraUpdate.newLatLngZoom(
-              LatLng(pos.latitude, pos.longitude),
-              14.0,
-            ),
-          );
-        } catch (_) {}
+        _mapController?.animateCamera(
+          CameraUpdate.newLatLngZoom(
+            LatLng(pos.latitude, pos.longitude),
+            14.0,
+          ),
+        );
       }
     } catch (_) {}
   }
 
   @override
   void dispose() {
-    _isStyleLoaded = false;
-    _layerAdded = false;
-    _mapController = null;
     _mapLoadTimeoutTimer?.cancel();
     _cameraDebounceTimer?.cancel();
     _statusTickerTimer?.cancel();
@@ -146,7 +154,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
     setState(() {
       _isMapLoading = true;
       _isStyleLoaded = false;
-      _layerAdded = false;
       _mapTimedOut = false;
     });
 
@@ -162,12 +169,68 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 
   Future<void> _onStyleLoaded() async {
-    if (!mounted || _mapController == null) return;
     _isStyleLoaded = true;
     _layerAdded = false;
-    await _syncGeoJsonCircleLayer();
-    if (!_hasFitInitialBounds && !_hasSavedCamera && mounted && _mapController != null) {
+    await _addGeoJsonCircleLayer();
+    if (!_hasFitInitialBounds && !_hasSavedCamera) {
       await _fitBoundsToVisibleMembers();
+    }
+  }
+
+  Future<void> _addGeoJsonCircleLayer() async {
+    final controller = _mapController;
+    if (controller == null || !_isStyleLoaded || _layerAdded) return;
+
+    try {
+      final state = ref.read(appControllerProvider);
+      final visible = state.cachedLocations
+          .where((loc) => state.followedUserIds.contains(loc.userId))
+          .toList();
+
+      final features = visible.map((loc) {
+        return {
+          'type': 'Feature',
+          'id': loc.userId,
+          'properties': {
+            'user_id': loc.userId,
+            'color': loc.color,
+          },
+          'geometry': {
+            'type': 'Point',
+            'coordinates': [loc.lng, loc.lat],
+          },
+        };
+      }).toList();
+
+      final featureCollection = {
+        'type': 'FeatureCollection',
+        'features': features,
+      };
+
+      try {
+        await controller.addGeoJsonSource(_geoJsonSourceId, featureCollection);
+      } catch (e) {
+        debugPrint('addGeoJsonSource error: $e');
+      }
+
+      try {
+        await controller.addCircleLayer(
+          _geoJsonSourceId,
+          _circleLayerId,
+          const CircleLayerProperties(
+            circleColor: ['get', 'color'],
+            circleRadius: 9.0,
+            circleStrokeWidth: 2.5,
+            circleStrokeColor: '#FFFFFF',
+          ),
+        );
+      } catch (e) {
+        debugPrint('addCircleLayer error: $e');
+      }
+
+      _layerAdded = true;
+    } catch (e) {
+      debugPrint('_addGeoJsonCircleLayer error: $e');
     }
   }
 
@@ -175,16 +238,13 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // 2. Save camera (lat, lng, zoom) to shared_preferences when idle (debounced)
     _cameraDebounceTimer?.cancel();
     _cameraDebounceTimer = Timer(const Duration(milliseconds: 600), () async {
-      if (!mounted || _mapController == null) return;
-      try {
-        final cam = _mapController?.cameraPosition;
-        if (cam != null) {
-          final prefs = ref.read(sharedPreferencesProvider);
-          await prefs.setDouble('ft_camera_lat', cam.target.latitude);
-          await prefs.setDouble('ft_camera_lng', cam.target.longitude);
-          await prefs.setDouble('ft_camera_zoom', cam.zoom);
-        }
-      } catch (_) {}
+      final cam = _mapController?.cameraPosition;
+      if (cam != null) {
+        final prefs = ref.read(sharedPreferencesProvider);
+        await prefs.setDouble('ft_camera_lat', cam.target.latitude);
+        await prefs.setDouble('ft_camera_lng', cam.target.longitude);
+        await prefs.setDouble('ft_camera_zoom', cam.zoom);
+      }
     });
 
     if (_isStyleLoaded && _isMapLoading && mounted) {
@@ -196,40 +256,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
     }
   }
 
-  Map<String, dynamic> _buildFeatureCollection() {
-    final state = ref.read(appControllerProvider);
-    final visible = state.cachedLocations
-        .where((loc) => state.followedUserIds.contains(loc.userId))
-        .toList();
-
-    final features = visible.map((loc) {
-      return {
-        'type': 'Feature',
-        'id': loc.userId,
-        'properties': {
-          'user_id': loc.userId,
-          'color': loc.color.isNotEmpty ? loc.color : '#2563EB',
-        },
-        'geometry': {
-          'type': 'Point',
-          'coordinates': [loc.lng, loc.lat],
-        },
-      };
-    }).toList();
-
-    return {
-      'type': 'FeatureCollection',
-      'features': features,
-    };
-  }
-
-  /// Adds the GeoJSON source and circle layer ONLY when style is loaded.
-  /// Called exclusively from onStyleLoadedCallback.
-  /// - _layerAdded is set to true only after both addGeoJsonSource and addCircleLayer complete.
-  /// - All calls to removeLayer and removeSource are wrapped in try/catch.
+  /// Updates followed member positions using the existing GeoJSON source.
+  /// Never removes or re-adds the source or layer if already added.
   Future<void> _syncGeoJsonCircleLayer() async {
     final controller = _mapController;
-    if (controller == null || !_isStyleLoaded || !mounted) return;
+    if (controller == null || !_isStyleLoaded || !_layerAdded) return;
 
     if (_isSyncingLayers) {
       _pendingLayerSync = true;
@@ -238,84 +269,64 @@ class _MapScreenState extends ConsumerState<MapScreen>
     _isSyncingLayers = true;
 
     try {
-      final featureCollection = _buildFeatureCollection();
+      final state = ref.read(appControllerProvider);
+      final visible = state.cachedLocations
+          .where((loc) => state.followedUserIds.contains(loc.userId))
+          .toList();
 
-      if (!_layerAdded) {
-        try {
-          await controller.removeLayer(_circleLayerId);
-        } catch (_) {}
-        try {
-          await controller.removeSource(_geoJsonSourceId);
-        } catch (_) {}
+      final features = visible.map((loc) {
+        return {
+          'type': 'Feature',
+          'id': loc.userId,
+          'properties': {
+            'user_id': loc.userId,
+            'color': loc.color,
+          },
+          'geometry': {
+            'type': 'Point',
+            'coordinates': [loc.lng, loc.lat],
+          },
+        };
+      }).toList();
 
-        await controller.addGeoJsonSource(_geoJsonSourceId, featureCollection);
-        await controller.addCircleLayer(
-          _geoJsonSourceId,
-          _circleLayerId,
-          const CircleLayerProperties(
-            circleColor: [
-              'case',
-              ['has', 'color'],
-              ['get', 'color'],
-              '#2563EB',
-            ],
-            circleRadius: 9.0,
-            circleStrokeWidth: 2.5,
-            circleStrokeColor: '#FFFFFF',
-          ),
-        );
-        // Set _layerAdded to true ONLY after both add calls complete successfully
-        _layerAdded = true;
-      } else {
+      final featureCollection = {
+        'type': 'FeatureCollection',
+        'features': features,
+      };
+
+      try {
         await controller.setGeoJsonSource(_geoJsonSourceId, featureCollection);
+      } catch (e) {
+        debugPrint('setGeoJsonSource error: $e');
       }
-    } catch (e) {
-      _layerAdded = false;
-      debugPrint('Error in _syncGeoJsonCircleLayer: $e');
+    } catch (_) {
     } finally {
       _isSyncingLayers = false;
-      if (_pendingLayerSync && mounted && _layerAdded) {
+      if (_pendingLayerSync) {
         _pendingLayerSync = false;
-        unawaited(_updateGeoJsonData());
+        unawaited(_syncGeoJsonCircleLayer());
       }
-    }
-  }
-
-  /// Safe update of GeoJSON source data when member locations change.
-  /// Called from ref.listen or member toggles. NEVER adds layers.
-  Future<void> _updateGeoJsonData() async {
-    final controller = _mapController;
-    if (controller == null || !_layerAdded || !_isStyleLoaded || !mounted) {
-      return;
-    }
-    try {
-      final featureCollection = _buildFeatureCollection();
-      await controller.setGeoJsonSource(_geoJsonSourceId, featureCollection);
-    } catch (e) {
-      debugPrint('Error updating GeoJSON data: $e');
     }
   }
 
   Future<void> _fitBoundsToVisibleMembers() async {
     final controller = _mapController;
-    if (controller == null || !mounted) return;
-
-    final state = ref.read(appControllerProvider);
-    final visible = state.cachedLocations
-        .where((loc) => state.followedUserIds.contains(loc.userId))
-        .toList();
-
-    if (visible.isEmpty) return;
-    _hasFitInitialBounds = true;
-
+    if (controller == null) return;
     try {
+      final state = ref.read(appControllerProvider);
+      final visible = state.cachedLocations
+          .where((l) => state.followedUserIds.contains(l.userId))
+          .toList();
+      if (visible.isEmpty) return;
+
       if (visible.length == 1) {
         await controller.animateCamera(
           CameraUpdate.newLatLngZoom(
             LatLng(visible.first.lat, visible.first.lng),
-            14.5,
+            14.0,
           ),
         );
+        _hasFitInitialBounds = true;
         return;
       }
 
@@ -324,7 +335,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       double minLng = visible.first.lng;
       double maxLng = visible.first.lng;
 
-      for (final loc in visible.skip(1)) {
+      for (final loc in visible) {
         minLat = math.min(minLat, loc.lat);
         maxLat = math.max(maxLat, loc.lat);
         minLng = math.min(minLng, loc.lng);
@@ -334,8 +345,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
       await controller.animateCamera(
         CameraUpdate.newLatLngBounds(
           LatLngBounds(
-            southwest: LatLng(minLat - 0.005, minLng - 0.005),
-            northeast: LatLng(maxLat + 0.005, maxLng + 0.005),
+            southwest: LatLng(minLat, minLng),
+            northeast: LatLng(maxLat, maxLng),
           ),
           left: 48,
           top: 48,
@@ -343,21 +354,22 @@ class _MapScreenState extends ConsumerState<MapScreen>
           bottom: 48,
         ),
       );
+      _hasFitInitialBounds = true;
     } catch (e) {
-      debugPrint('animateCamera in _fitBoundsToVisibleMembers caught: $e');
+      debugPrint('fitBounds error: $e');
     }
   }
 
   Future<void> _focusMemberOnMap(MemberLocation loc) async {
     final controller = _mapController;
-    if (controller == null || !mounted) return;
+    if (controller == null) return;
 
     try {
       await controller.animateCamera(
         CameraUpdate.newLatLngZoom(LatLng(loc.lat, loc.lng), 15.5),
       );
     } catch (e) {
-      debugPrint('focusMemberOnMap caught: $e');
+      debugPrint('focusMember error: $e');
     }
   }
 
@@ -442,7 +454,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                               await ref
                                   .read(appControllerProvider.notifier)
                                   .toggleFollowedMember(member.userId);
-                              await _updateGeoJsonData();
+                              await _syncGeoJsonCircleLayer();
                             },
                             secondary: Container(
                               width: 12,
@@ -490,7 +502,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     ref.listen<AppState>(appControllerProvider, (prev, next) {
       if (prev?.cachedLocations != next.cachedLocations ||
           prev?.followedUserIds != next.followedUserIds) {
-        _updateGeoJsonData();
+        _syncGeoJsonCircleLayer();
       }
     });
 
@@ -542,15 +554,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
               if (style == effectiveStyle) return;
               _startMapLoadingCycle();
               _layerAdded = false;
-              _isStyleLoaded = false;
               await ref
                   .read(appControllerProvider.notifier)
                   .setMapStyle(style);
-              try {
-                await _mapController?.setStyle(AppConfig.styleUrl(style));
-              } catch (e) {
-                debugPrint('setStyle error: $e');
-              }
+              await _mapController?.setStyle(AppConfig.styleUrl(style));
             },
             itemBuilder: (context) => [
               CheckedPopupMenuItem(
@@ -667,15 +674,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
                             TextButton(
                               onPressed: () {
                                 _startMapLoadingCycle();
-                                _layerAdded = false;
-                                _isStyleLoaded = false;
-                                try {
-                                  _mapController?.setStyle(
-                                    AppConfig.styleUrl(effectiveStyle),
-                                  );
-                                } catch (e) {
-                                  debugPrint('retry setStyle error: $e');
-                                }
+                                _mapController?.setStyle(
+                                  AppConfig.styleUrl(effectiveStyle),
+                                );
                               },
                               child: Text(l10n.tr('retry')),
                             ),
@@ -689,7 +690,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
           ),
 
           _buildStatusLine(theme),
-          _buildLastErrorLine(theme),
 
           Container(
             width: double.infinity,
@@ -805,6 +805,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final prefs = ref.watch(sharedPreferencesProvider);
     final lastSentAtMs = prefs.getInt('bg_last_sent_at_ms');
     final lastCheckStatus = prefs.getString('bg_last_check_status');
+    final lastErrorMsg = prefs.getString('ft_last_error_msg');
+    final lastErrorTime = prefs.getString('ft_last_error_time');
+    final lastErrorStack = prefs.getString('ft_last_error_stack') ?? '';
 
     String text;
     if (lastSentAtMs == null) {
@@ -819,93 +822,70 @@ class _MapScreenState extends ConsumerState<MapScreen>
           'Last sent: $ago${lastCheckStatus != null ? ' • $lastCheckStatus' : ''}';
     }
 
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        border: Border(
-          top: BorderSide(
-            color: theme.colorScheme.onSurface.withOpacity(0.08),
-          ),
-        ),
-      ),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 11,
-          color: theme.colorScheme.onSurface.withOpacity(0.55),
-        ),
-        overflow: TextOverflow.ellipsis,
-      ),
-    );
-  }
-
-  /// Displays the last recorded global error (from FlutterError, PlatformDispatcher, or Zone)
-  /// with a tap-to-copy interaction so failures can be diagnosed directly on device.
-  Widget _buildLastErrorLine(ThemeData theme) {
-    final prefs = ref.watch(sharedPreferencesProvider);
-    final lastErrMsg = prefs.getString('ft_last_error_message');
-    final lastErrTime = prefs.getString('ft_last_error_time');
-    final lastErrStack = prefs.getString('ft_last_error_stack') ?? '';
-
-    if (lastErrMsg == null || lastErrMsg.isEmpty) {
-      return const SizedBox.shrink();
-    }
-
-    return InkWell(
-      onTap: () {
-        final fullText = '$lastErrMsg ($lastErrTime)\n$lastErrStack';
-        Clipboard.setData(ClipboardData(text: fullText));
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Error copied to clipboard'),
-            duration: Duration(seconds: 2),
-          ),
-        );
-      },
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
-        decoration: BoxDecoration(
-          color: theme.colorScheme.error.withOpacity(0.12),
-          border: Border(
-            top: BorderSide(
-              color: theme.colorScheme.error.withOpacity(0.3),
-            ),
-          ),
-        ),
-        child: Row(
-          children: [
-            Icon(Icons.warning_amber_rounded, size: 14, color: theme.colorScheme.error),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(
-                'Last error ($lastErrTime): $lastErrMsg (tap to copy)',
-                style: TextStyle(
-                  fontSize: 10.5,
-                  color: theme.colorScheme.error,
-                  fontFamily: 'monospace',
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (lastErrorMsg != null && lastErrorMsg.isNotEmpty)
+          InkWell(
+            onTap: () async {
+              final payload =
+                  'Time: $lastErrorTime\nMessage: $lastErrorMsg\nStack:\n$lastErrorStack';
+              await Clipboard.setData(ClipboardData(text: payload));
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Last error copied to clipboard'),
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+              }
+            },
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              color: Colors.red.withOpacity(0.08),
+              child: Row(
+                children: [
+                  const Icon(Icons.error_outline, size: 13, color: Colors.red),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Last error ($lastErrorTime): $lastErrorMsg (tap to copy)',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Colors.red,
+                        fontWeight: FontWeight.w500,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
               ),
             ),
-            IconButton(
-              icon: const Icon(Icons.close, size: 14),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
-              tooltip: 'Dismiss',
-              onPressed: () async {
-                await prefs.remove('ft_last_error_message');
-                await prefs.remove('ft_last_error_stack');
-                await prefs.remove('ft_last_error_time');
-                if (mounted) setState(() {});
-              },
+          ),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surface,
+            border: Border(
+              top: BorderSide(
+                color: theme.colorScheme.onSurface.withOpacity(0.08),
+              ),
             ),
-          ],
+          ),
+          child: Text(
+            text,
+            style: TextStyle(
+              fontSize: 11,
+              color: theme.colorScheme.onSurface.withOpacity(0.55),
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
         ),
-      ),
+      ],
     );
   }
 }

@@ -45,28 +45,17 @@ jobs:
           fi
           python3 -m json.tool config/env.json > /dev/null
 
-      - name: Regenerate Android scaffold with the current Flutter template (keep manifest, build.gradle & ProGuard rules)
+      - name: Regenerate Android scaffold with the current Flutter template (keep AndroidManifest.xml)
         run: |
           cp android/app/src/main/AndroidManifest.xml /tmp/AndroidManifest.xml
-          cp android/app/proguard-rules.pro /tmp/proguard-rules.pro
           cp android/app/build.gradle /tmp/build.gradle
-          mkdir -p /tmp/kotlin_backup
-          cp -r android/app/src/main/kotlin/* /tmp/kotlin_backup/
-          mkdir -p /tmp/drawable
-          cp -r android/app/src/main/res/drawable/* /tmp/drawable/
           rm -rf android
           flutter create . --platforms=android --org com.familytrack --project-name family_track
           cp /tmp/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
-          cp /tmp/proguard-rules.pro android/app/proguard-rules.pro
-          mkdir -p android/app/src/main/res/drawable
-          cp -r /tmp/drawable/* android/app/src/main/res/drawable/
-          mkdir -p android/app/src/main/kotlin
-          cp -r /tmp/kotlin_backup/* android/app/src/main/kotlin/
           sed -i 's/ package="[^"]*"//' android/app/src/main/AndroidManifest.xml
           if ! grep -q "android.builtInKotlin=false" android/gradle.properties; then
             echo "android.builtInKotlin=false" >> android/gradle.properties
           fi
-          # Ensure minSdk = 23, R8 minification disabled (prevents stripping MapLibre C++ native classes)
           rm -f android/app/build.gradle.kts
           cp /tmp/build.gradle android/app/build.gradle
 

@@ -69,6 +69,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final state = ref.watch(appControllerProvider);
+    final prefs = ref.watch(sharedPreferencesProvider);
+    final lastErrorMsg = prefs.getString('ft_last_error_msg');
+    final lastErrorTime = prefs.getString('ft_last_error_time');
+    final lastErrorStack = prefs.getString('ft_last_error_stack') ?? '';
     final theme = Theme.of(context);
     final isCooldownActive = state.loginCooldownRemainingSeconds > 0;
 
@@ -96,6 +100,52 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   color: theme.colorScheme.onSurface.withOpacity(0.7),
                 ),
               ),
+              if (lastErrorMsg != null && lastErrorMsg.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                InkWell(
+                  onTap: () async {
+                    final payload =
+                        'Time: $lastErrorTime\nMessage: $lastErrorMsg\nStack:\n$lastErrorStack';
+                    await Clipboard.setData(ClipboardData(text: payload));
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Last error copied to clipboard'),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    }
+                  },
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.red.withOpacity(0.3)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.error_outline,
+                            size: 16, color: Colors.red),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Last error ($lastErrorTime): $lastErrorMsg (tap to copy)',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Colors.red,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
               if (state.lastSavedGroup != null) ...[
                 const SizedBox(height: 20),
                 OutlinedButton.icon(
